@@ -17,6 +17,14 @@ from .experiments import (
 )
 from .intake import configure_intake
 from .models import MetricDirection, PredictionType, SplitType, TaskType
+from .runs import (
+    RunError,
+    list_run_summaries,
+    run_local_experiment,
+    run_logs,
+    show_run,
+    verify_run,
+)
 from .validation import activate_validation, configure_validation
 from .workspace import (
     WorkspaceError,
@@ -34,11 +42,16 @@ validation_app = typer.Typer(
 )
 experiment_app = typer.Typer(
     no_args_is_help=True,
-    help="Create, freeze, inspect, and trace experiments.",
+    help="Create, freeze, inspect, trace, and run experiments.",
+)
+run_app = typer.Typer(
+    no_args_is_help=True,
+    help="Inspect and verify execution runs.",
 )
 app.add_typer(intake_app, name="intake")
 app.add_typer(validation_app, name="validation")
 app.add_typer(experiment_app, name="exp")
+app.add_typer(run_app, name="run")
 
 
 def _fail(code: str, exc: Exception, json_output: bool) -> None:
@@ -294,6 +307,39 @@ def experiment_freeze(
         typer.echo(f"Frozen {name}: {record['config_hash']}")
 
 
+@experiment_app.command("run")
+def experiment_run(
+    name: str = typer.Argument(..., help="Frozen experiment ID, e.g. exp001."),
+    backend: str | None = typer.Option(None, "--backend", help="Backend override. This slice supports local only."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Execute a frozen experiment as a new run."""
+    try:
+        workspace = discover_workspace()
+        record = run_local_experiment(workspace, name, backend=backend)
+    except (RunError, ExperimentError, WorkspaceError, ValueError, OSError) as exc:
+        if str(exc) == "EXPERIMENT_NOT_FROZEN":
+            code = "EXPERIMENT_NOT_FROZEN"
+        elif str(exc) == "FROZEN_SPEC_MODIFIED":
+            code = "FROZEN_SPEC_MODIFIED"
+        else:
+            code = "RUN_EXECUTION_FAILED"
+        _fail(code, exc, json_output)
+
+    payload = {
+        "ok": True,
+        "run": record["name"],
+        "experiment": record["experiment_name"],
+        "status": record["status"],
+        "backend": record["backend"],
+        "manifest_hash": record["artifact_manifest_hash"],
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        typer.echo(f"{record['name']} {record['status']} ({record['experiment_name']}, {record['backend']})")
+
+
 @experiment_app.command("show")
 def experiment_show(
     name: str = typer.Argument(..., help="Experiment ID, e.g. exp001."),
@@ -334,9 +380,7 @@ def experiment_list(
             typer.echo("No experiments.")
             return
         for item in experiments:
-            typer.echo(
-                f"{item['id']}  {item['status']}  {item['validation']}  {item['title']}"
-            )
+            typer.echo(f"{item['id']}  {item['status']}  {item['validation']}  {item['title']}")
 
 
 @experiment_app.command("lineage")
@@ -359,6 +403,85 @@ def experiment_lineage_command(
             return
         for edge in edges:
             typer.echo(f"{edge['parent']} --{edge['relation']}--> {edge['child']}")
+
+
+@run_app.command("show")
+def run_show_command(
+    name: str = typer.Argument(..., help="Run ID, e.g. run001."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Show a run record and artifact manifest."""
+    try:
+        workspace = discover_workspace()
+        payload = {"ok": True, **show_run(workspace, name)}
+    except (RunError, WorkspaceError, ValueError, OSError) as exc:
+        _fail("RUN_SHOW_FAILED", exc, json_output)
+
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        record = payload["record"]
+        typer.echo(f"Run: {record['name']} — {record['experiment_name']}")
+        typer.echo(f"Status: {record['status']}")
+        typer.echo(f"Backend: {record['backend']}")
+        typer.echo(f"Exit code: {record['exit_code']}")
+
+
+@run_app.command("list")
+def run_list_command(
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """List execution runs in creation order."""
+    try:
+        workspace = discover_workspace()
+        runs = list_run_summaries(workspace)
+    except (RunError, WorkspaceError, ValueError, OSError) as exc:
+        _fail("RUN_LIST_FAILED", exc, json_output)
+
+    if json_output:
+        typer.echo(json.dumps({"ok": True, "runs": runs}, indent=2, sort_keys=True))
+    else:
+        if not runs:
+            typer.echo("No runs.")
+            return
+        for item in runs:
+            typer.echo(f"{item['id']}  {item['status']}  {item['backend']}  {item['experiment']}")
+
+
+@run_app.command("logs")
+def run_logs_command(
+    name: str = typer.Argument(..., help="Run ID, e.g. run001."),
+) -> None:
+    """Print captured stdout/stderr for a run."""
+    try:
+        workspace = discover_workspace()
+        typer.echo(run_logs(workspace, name), nl=False)
+    except (RunError, WorkspaceError, ValueError, OSError) as exc:
+        _fail("RUN_LOGS_FAILED", exc, False)
+
+
+@run_app.command("verify")
+def run_verify_command(
+    name: str = typer.Argument(..., help="Completed or invalid run ID."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Re-verify the standard artifact contract for a run."""
+    try:
+        workspace = discover_workspace()
+        record = verify_run(workspace, name)
+    except (RunError, WorkspaceError, ValueError, OSError) as exc:
+        _fail("RUN_VERIFICATION_FAILED", exc, json_output)
+
+    payload = {
+        "ok": True,
+        "run": record["name"],
+        "status": record["status"],
+        "manifest_hash": record["artifact_manifest_hash"],
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        typer.echo(f"Verified {record['name']}: {record['artifact_manifest_hash']}")
 
 
 @app.command()
