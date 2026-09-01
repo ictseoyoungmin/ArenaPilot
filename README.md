@@ -170,6 +170,31 @@ MLflow
 = params, metrics, fold metrics, copied artifacts
 ```
 
+## Compare experiments
+
+Only canonical VERIFIED Runs in the same comparison domain can be compared directly:
+
+```bash
+arena exp compare exp001 exp002
+arena exp compare exp001 exp002 --json
+```
+
+ArenaPilot checks `comparison_domain_hash` before reading metric deltas. If validation domains differ, comparison fails with `COMPARISON_DOMAIN_MISMATCH`; there is intentionally no force flag that would turn incompatible scores into a misleading numeric delta.
+
+A successful comparison reports:
+
+```text
+primary metric: baseline -> candidate
+raw delta: candidate - baseline
+direction-normalized delta: positive always means improvement
+fold-by-fold deltas
+fold standard deviation change
+runtime delta when recorded
+model / pipeline / seed / runtime config changes
+```
+
+The comparison uses the Experiment's pinned canonical Run rather than automatically choosing the best repeat/seed Run. This avoids turning repeated executions into implicit leaderboard-style cherry-picking.
+
 ## Workspace contract
 
 ```text
@@ -205,4 +230,4 @@ pytest -q
 arena version
 ```
 
-Experiment comparison, Kaggle compute, submissions, and cross-competition memory remain subsequent slices.
+Kaggle compute, submissions, and cross-competition memory remain subsequent slices.
