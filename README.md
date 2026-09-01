@@ -195,6 +195,52 @@ model / pipeline / seed / runtime config changes
 
 The comparison uses the Experiment's pinned canonical Run rather than automatically choosing the best repeat/seed Run. This avoids turning repeated executions into implicit leaderboard-style cherry-picking.
 
+## Execute on Kaggle compute
+
+ArenaPilot uses the official Kaggle CLI as a provider adapter. A frozen Experiment can be dispatched without changing its artifact or MLflow contract:
+
+```bash
+export ARENA_KAGGLE_OWNER=<kaggle-username>
+arena exp run exp001 --backend kaggle
+```
+
+The default remote behavior is asynchronous. ArenaPilot creates a new Run, builds a self-contained script bundle under `.arena/bundles/<run>`, pushes it with `kaggle kernels push`, records the provider job in SQLite, and returns the Run in `queued` state.
+
+The bundle embeds the workspace `src/` tree and materializes it in the Kaggle runtime before invoking the same entrypoint:
+
+```bash
+python -m src.train
+```
+
+The remote process receives the same Arena environment contract. `ARENA_DATA_DIR` points to `/kaggle/input/<competition-slug>` and `ARENA_OUTPUT_DIR` points to `/kaggle/working`. The competition itself is attached through `competition_sources` in `kernel-metadata.json`.
+
+Synchronize or diagnose a remote Run with:
+
+```bash
+arena remote status run001
+arena remote logs run001
+arena remote recover run001
+```
+
+Recovery only proceeds after Kaggle reports the kernel complete. ArenaPilot downloads the latest kernel output, places it under `outputs/runs/<run>`, and then sends those files through the exact same local verification and MLflow-ingestion path. A Kaggle process is therefore not considered VERIFIED merely because the provider reports completion.
+
+Remote state is intentionally split:
+
+```text
+Arena Run
+created -> queued -> running -> completed -> verifying -> verified
+
+Remote Job
+created -> submitted -> queued/running -> completed/failed
+
+Recovery
+pending -> pulled -> verified/failed
+```
+
+Arena DB schema v3 adds `remote_jobs`, including the provider kernel reference, bundle path, provider state, and recovery state. Kaggle credentials remain outside ArenaPilot state. The non-secret owner name is resolved from `ARENA_KAGGLE_OWNER`, `KAGGLE_USERNAME`, or legacy `~/.kaggle/kaggle.json` metadata.
+
+`compute.kaggle.accelerator: gpu` uses Kaggle's default GPU selection. A concrete accelerator ID in `arena.yaml` is forwarded to `kaggle kernels push --accelerator`.
+
 ## Workspace contract
 
 ```text
@@ -214,6 +260,7 @@ competition/
 ├── reports/
 ├── notebooks/
 └── .arena/
+    ├── bundles/
     ├── workspace.json
     └── arena.db
 ```
@@ -230,4 +277,4 @@ pytest -q
 arena version
 ```
 
-Kaggle compute, submissions, and cross-competition memory remain subsequent slices.
+Submissions and cross-competition memory remain subsequent slices.
