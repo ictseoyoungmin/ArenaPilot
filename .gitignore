@@ -1,0 +1,16 @@
+__pycache__/
+.pytest_cache/
+.venv/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# ArenaPilot runtime state and generated artifacts
+.arena/*.db
+outputs/
+submissions/*.csv
+
+# Local MLflow state
+mlruns/
+mlflow.db
