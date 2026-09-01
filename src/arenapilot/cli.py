@@ -7,6 +7,9 @@ import typer
 
 from . import __version__
 from .db import initialize_database, read_schema_version
+from .intake import configure_intake
+from .models import MetricDirection, PredictionType, SplitType, TaskType
+from .validation import activate_validation, configure_validation
 from .workspace import (
     WorkspaceError,
     WorkspaceNotFoundError,
@@ -16,6 +19,28 @@ from .workspace import (
 )
 
 app = typer.Typer(no_args_is_help=True, help="ArenaPilot competition runtime")
+intake_app = typer.Typer(no_args_is_help=True, help="Configure competition intake.")
+validation_app = typer.Typer(
+    no_args_is_help=True,
+    help="Configure and activate validation contracts.",
+)
+app.add_typer(intake_app, name="intake")
+app.add_typer(validation_app, name="validation")
+
+
+def _fail(code: str, exc: Exception, json_output: bool) -> None:
+    if json_output:
+        typer.echo(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": {"code": code, "message": str(exc)},
+                }
+            )
+        )
+    else:
+        typer.echo(f"ArenaPilot failed: {exc}", err=True)
+    raise typer.Exit(code=1)
 
 
 @app.command()
@@ -35,11 +60,7 @@ def init_workspace(
     try:
         workspace = create_workspace(competition, path, title=title)
     except WorkspaceError as exc:
-        if json_output:
-            typer.echo(json.dumps({"ok": False, "error": {"code": "WORKSPACE_INIT_FAILED", "message": str(exc)}}))
-        else:
-            typer.echo(f"ArenaPilot init failed: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
+        _fail("WORKSPACE_INIT_FAILED", exc, json_output)
 
     payload = {
         "ok": True,
@@ -62,11 +83,7 @@ def status(json_output: bool = typer.Option(False, "--json", help="Emit machine-
         workspace = discover_workspace()
         config = load_arena_config(workspace)
     except (WorkspaceError, ValueError, OSError) as exc:
-        if json_output:
-            typer.echo(json.dumps({"ok": False, "error": {"code": "WORKSPACE_STATUS_FAILED", "message": str(exc)}}))
-        else:
-            typer.echo(f"ArenaPilot status failed: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
+        _fail("WORKSPACE_STATUS_FAILED", exc, json_output)
 
     payload = {
         "ok": True,
@@ -85,6 +102,119 @@ def status(json_output: bool = typer.Option(False, "--json", help="Emit machine-
         typer.echo(f"Task configured: {payload['task_configured']}")
         typer.echo(f"Metric configured: {payload['metric_configured']}")
         typer.echo(f"Active validation: {config.validation.active or '-'}")
+
+
+@intake_app.command("set")
+def intake_set(
+    task: TaskType = typer.Option(..., "--task", help="Competition task type."),
+    target: str = typer.Option(..., "--target", help="Target column."),
+    metric: str = typer.Option(..., "--metric", help="Primary competition metric."),
+    direction: MetricDirection = typer.Option(..., "--direction", help="Metric optimization direction."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Set the competition task, target, and primary metric while still draft."""
+    try:
+        workspace = discover_workspace()
+        config = configure_intake(
+            workspace,
+            task_type=task,
+            target=target,
+            metric_name=metric,
+            metric_direction=direction,
+        )
+    except (WorkspaceError, ValueError, OSError) as exc:
+        _fail("INTAKE_CONFIG_FAILED", exc, json_output)
+
+    assert config.task is not None
+    assert config.metric is not None
+    payload = {
+        "ok": True,
+        "competition_status": config.competition.status,
+        "task": config.task.type,
+        "target": config.task.target,
+        "metric": config.metric.name,
+        "direction": config.metric.direction,
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        typer.echo(
+            f"Configured intake: {config.task.type} target={config.task.target}, "
+            f"metric={config.metric.name} ({config.metric.direction})"
+        )
+
+
+@validation_app.command("configure")
+def validation_configure(
+    name: str = typer.Argument(..., help="Validation ID, e.g. val-v1."),
+    split: SplitType = typer.Option(..., "--split", help="Split strategy."),
+    prediction: PredictionType = typer.Option(..., "--prediction", help="Prediction semantics."),
+    n_splits: int = typer.Option(5, "--n-splits", min=2),
+    shuffle: bool = typer.Option(True, "--shuffle/--no-shuffle"),
+    random_state: int | None = typer.Option(42, "--random-state"),
+    group_column: str | None = typer.Option(None, "--group-column"),
+    time_column: str | None = typer.Option(None, "--time-column"),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Configure a draft validation using the competition metric."""
+    try:
+        workspace = discover_workspace()
+        spec = configure_validation(
+            workspace,
+            name,
+            split_type=split,
+            prediction_type=prediction,
+            n_splits=n_splits,
+            shuffle=shuffle,
+            random_state=random_state,
+            group_column=group_column,
+            time_column=time_column,
+        )
+    except (WorkspaceError, ValueError, OSError) as exc:
+        _fail("VALIDATION_CONFIG_FAILED", exc, json_output)
+
+    assert spec.prediction is not None
+    assert spec.metric is not None
+    payload = {
+        "ok": True,
+        "validation": spec.id,
+        "status": spec.status,
+        "split": spec.split.type,
+        "prediction": spec.prediction.type,
+        "metric": spec.metric.name,
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        typer.echo(
+            f"Configured {spec.id}: {spec.split.type}, "
+            f"prediction={spec.prediction.type}, metric={spec.metric.name}"
+        )
+
+
+@validation_app.command("activate")
+def validation_activate(
+    name: str = typer.Argument(..., help="Validation ID, e.g. val-v1."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Activate a complete validation and move the competition to ready."""
+    try:
+        workspace = discover_workspace()
+        config, spec = activate_validation(workspace, name)
+    except (WorkspaceError, ValueError, OSError) as exc:
+        _fail("VALIDATION_ACTIVATION_FAILED", exc, json_output)
+
+    payload = {
+        "ok": True,
+        "validation": spec.id,
+        "validation_status": spec.status,
+        "competition_status": config.competition.status,
+        "active_validation": config.validation.active,
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        typer.echo(f"Activated {spec.id}. Competition status: {config.competition.status}.")
 
 
 @app.command()
