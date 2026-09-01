@@ -7,6 +7,14 @@ import typer
 
 from . import __version__
 from .db import initialize_database, read_schema_version
+from .experiments import (
+    ExperimentError,
+    create_experiment,
+    experiment_lineage,
+    freeze_experiment,
+    list_experiment_summaries,
+    show_experiment,
+)
 from .intake import configure_intake
 from .models import MetricDirection, PredictionType, SplitType, TaskType
 from .validation import activate_validation, configure_validation
@@ -24,8 +32,13 @@ validation_app = typer.Typer(
     no_args_is_help=True,
     help="Configure and activate validation contracts.",
 )
+experiment_app = typer.Typer(
+    no_args_is_help=True,
+    help="Create, freeze, inspect, and trace experiments.",
+)
 app.add_typer(intake_app, name="intake")
 app.add_typer(validation_app, name="validation")
+app.add_typer(experiment_app, name="exp")
 
 
 def _fail(code: str, exc: Exception, json_output: bool) -> None:
@@ -215,6 +228,137 @@ def validation_activate(
         typer.echo(json.dumps(payload, indent=2, sort_keys=True))
     else:
         typer.echo(f"Activated {spec.id}. Competition status: {config.competition.status}.")
+
+
+@experiment_app.command("new")
+def experiment_new(
+    title: str = typer.Option(..., "--title", help="Short experiment title."),
+    hypothesis: str = typer.Option(..., "--hypothesis", help="Testable experiment hypothesis."),
+    model_family: str = typer.Option(..., "--model-family", help="Model family, e.g. catboost."),
+    parent: str | None = typer.Option(None, "--from", help="Frozen parent experiment."),
+    relation: str = typer.Option("derived_from", "--relation", help="Parent relation."),
+    backend: str | None = typer.Option(None, "--backend", help="Optional local/kaggle backend override."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Create a draft experiment bound to the active validation."""
+    try:
+        workspace = discover_workspace()
+        spec = create_experiment(
+            workspace,
+            title=title,
+            hypothesis=hypothesis,
+            model_family=model_family,
+            parent=parent,
+            relation=relation,
+            backend=backend,
+        )
+    except (ExperimentError, WorkspaceError, ValueError, OSError) as exc:
+        _fail("EXPERIMENT_CREATE_FAILED", exc, json_output)
+
+    payload = {
+        "ok": True,
+        "experiment": spec.id,
+        "status": "draft",
+        "validation": spec.validation,
+        "path": str(workspace.experiment_path(spec.id)),
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        typer.echo(f"Created {spec.id}: {spec.title} (validation={spec.validation})")
+
+
+@experiment_app.command("freeze")
+def experiment_freeze(
+    name: str = typer.Argument(..., help="Experiment ID, e.g. exp001."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Freeze an experiment config and persist an immutable snapshot."""
+    try:
+        workspace = discover_workspace()
+        record, snapshot = freeze_experiment(workspace, name)
+    except (ExperimentError, WorkspaceError, ValueError, OSError) as exc:
+        code = "FROZEN_SPEC_MODIFIED" if str(exc) == "FROZEN_SPEC_MODIFIED" else "EXPERIMENT_FREEZE_FAILED"
+        _fail(code, exc, json_output)
+
+    payload = {
+        "ok": True,
+        "experiment": name,
+        "status": record["status"],
+        "config_hash": record["config_hash"],
+        "snapshot": str(snapshot),
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        typer.echo(f"Frozen {name}: {record['config_hash']}")
+
+
+@experiment_app.command("show")
+def experiment_show(
+    name: str = typer.Argument(..., help="Experiment ID, e.g. exp001."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Show an experiment spec, state, and lineage parents."""
+    try:
+        workspace = discover_workspace()
+        payload = {"ok": True, **show_experiment(workspace, name)}
+    except (ExperimentError, WorkspaceError, ValueError, OSError) as exc:
+        _fail("EXPERIMENT_SHOW_FAILED", exc, json_output)
+
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        record = payload["record"]
+        typer.echo(f"Experiment: {record['name']} — {record['title']}")
+        typer.echo(f"Status: {record['status']}")
+        typer.echo(f"Validation: {record['validation_id']}")
+        typer.echo(f"Spec integrity: {payload['spec_integrity']}")
+
+
+@experiment_app.command("list")
+def experiment_list(
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """List experiments in creation order."""
+    try:
+        workspace = discover_workspace()
+        experiments = list_experiment_summaries(workspace)
+    except (ExperimentError, WorkspaceError, ValueError, OSError) as exc:
+        _fail("EXPERIMENT_LIST_FAILED", exc, json_output)
+
+    if json_output:
+        typer.echo(json.dumps({"ok": True, "experiments": experiments}, indent=2, sort_keys=True))
+    else:
+        if not experiments:
+            typer.echo("No experiments.")
+            return
+        for item in experiments:
+            typer.echo(
+                f"{item['id']}  {item['status']}  {item['validation']}  {item['title']}"
+            )
+
+
+@experiment_app.command("lineage")
+def experiment_lineage_command(
+    name: str = typer.Argument(..., help="Experiment ID, e.g. exp002."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Show parent edges from an experiment back through its ancestry."""
+    try:
+        workspace = discover_workspace()
+        edges = experiment_lineage(workspace, name)
+    except (ExperimentError, WorkspaceError, ValueError, OSError) as exc:
+        _fail("EXPERIMENT_LINEAGE_FAILED", exc, json_output)
+
+    if json_output:
+        typer.echo(json.dumps({"ok": True, "experiment": name, "edges": edges}, indent=2, sort_keys=True))
+    else:
+        if not edges:
+            typer.echo(f"{name} has no parents.")
+            return
+        for edge in edges:
+            typer.echo(f"{edge['parent']} --{edge['relation']}--> {edge['child']}")
 
 
 @app.command()
