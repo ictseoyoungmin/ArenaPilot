@@ -12,16 +12,30 @@ ArenaPilot is a local-first agent runtime for reproducible machine-learning comp
 - **Memory is evidence-based**: cross-competition knowledge must retain supporting and contradicting evidence.
 - **CLI owns side effects**: agents edit declarative specs and use `arena` for mutations.
 
-## Bootstrap a competition workspace
+## Bootstrap and configure a competition workspace
 
 ```bash
 arena init kaggle:titanic
 cd titanic
+
+arena intake set \
+  --task binary_classification \
+  --target Survived \
+  --metric roc_auc \
+  --direction maximize
+
+arena validation configure val-v1 \
+  --split stratified_kfold \
+  --prediction probability
+
+arena validation activate val-v1
 arena status
 arena doctor
 ```
 
-`arena init` intentionally creates a **draft** workspace. At init time ArenaPilot may not yet know the target, metric, prediction semantics, or leakage-safe validation strategy. It therefore creates `arena.yaml` and `configs/validation/val-v1.yaml` without inventing those values. Competition intake will promote the configuration to `ready` in a later slice.
+`arena init` intentionally creates a **draft** workspace. At init time ArenaPilot may not yet know the target, metric, prediction semantics, or leakage-safe validation strategy. `arena intake set` records the competition task contract, and `arena validation configure` fills the draft validation using that primary metric. Only a complete, compatible validation can be activated; activation promotes the competition to `ready` and records validation/spec hashes in SQLite.
+
+Once a validation is active, the competition intake contract is immutable in v0. Changing target or metric later must be handled as an explicit migration rather than silently rewriting the evaluation history.
 
 The workspace contract is:
 
@@ -56,4 +70,4 @@ pytest -q
 arena version
 ```
 
-Kaggle data intake, validation activation, experiment execution, and MLflow ingestion remain subsequent slices.
+Experiment creation/freezing, run execution, Kaggle compute, and MLflow ingestion remain subsequent slices.
