@@ -6,14 +6,45 @@ ArenaPilot is a local-first agent runtime for reproducible machine-learning comp
 
 ## Core contract
 
-ArenaPilot separates four concerns from the start:
+- **Experiment != Run**: an experiment is intent; every execution creates a new run.
+- **Validation is versioned**: scores are only directly comparable inside a compatible validation domain.
+- **SQLite != MLflow**: ArenaPilot owns operational state; MLflow owns experiment telemetry and artifacts.
+- **Memory is evidence-based**: cross-competition knowledge must retain supporting and contradicting evidence.
+- **CLI owns side effects**: agents edit declarative specs and use `arena` for mutations.
 
-- **Experiment vs Run** — an experiment captures intent; every execution becomes a distinct run.
-- **Versioned validation** — experiments freeze the evaluation context they were designed against.
-- **Arena DB vs MLflow** — SQLite owns operational state; MLflow will own metrics and experiment telemetry.
-- **Cross-competition memory** — evidence can later be promoted into reusable, contextual competition knowledge.
+## Bootstrap a competition workspace
 
-The CLI is the supported mutation boundary. Declarative YAML is agent-editable; runtime state is not.
+```bash
+arena init kaggle:titanic
+cd titanic
+arena status
+arena doctor
+```
+
+`arena init` intentionally creates a **draft** workspace. At init time ArenaPilot may not yet know the target, metric, prediction semantics, or leakage-safe validation strategy. It therefore creates `arena.yaml` and `configs/validation/val-v1.yaml` without inventing those values. Competition intake will promote the configuration to `ready` in a later slice.
+
+The workspace contract is:
+
+```text
+competition/
+├── arena.yaml
+├── configs/
+│   ├── validation/val-v1.yaml
+│   ├── models/
+│   └── pipelines/
+├── experiments/
+├── src/
+├── data/{raw,processed}/
+├── outputs/runs/
+├── submissions/
+├── reports/
+├── notebooks/
+└── .arena/
+    ├── workspace.json
+    └── arena.db
+```
+
+Creation is staged in a sibling temporary directory and renamed into place only after all required files and the SQLite database are initialized, so a failed init does not leave a partially-created workspace at the requested destination.
 
 ## Development
 
@@ -25,4 +56,4 @@ pytest -q
 arena version
 ```
 
-The first implementation slice establishes the v0 schemas, workspace discovery, SQLite bootstrap, and CLI foundation. Kaggle execution and MLflow ingestion are intentionally subsequent slices.
+Kaggle data intake, validation activation, experiment execution, and MLflow ingestion remain subsequent slices.

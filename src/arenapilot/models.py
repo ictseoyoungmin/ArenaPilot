@@ -33,6 +33,7 @@ class CompetitionConfig(StrictModel):
     platform: Literal["kaggle"]
     slug: str = Field(min_length=1)
     title: str | None = None
+    status: Literal["draft", "ready"] = "draft"
 
 
 class TaskConfig(StrictModel):
@@ -46,7 +47,7 @@ class MetricConfig(StrictModel):
 
 
 class ValidationRef(StrictModel):
-    active: str = Field(min_length=1)
+    active: str | None = None
 
 
 class KaggleComputeConfig(StrictModel):
@@ -90,14 +91,30 @@ class WorkspaceConfig(StrictModel):
 class ArenaConfig(StrictModel):
     schema_version: Literal[1] = 1
     competition: CompetitionConfig
-    task: TaskConfig
-    metric: MetricConfig
-    validation: ValidationRef
+    task: TaskConfig | None = None
+    metric: MetricConfig | None = None
+    validation: ValidationRef = Field(default_factory=ValidationRef)
     compute: ComputeConfig = Field(default_factory=ComputeConfig)
     tracking: TrackingConfig
     submission: SubmissionConfig = Field(default_factory=SubmissionConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     workspace: WorkspaceConfig = Field(default_factory=WorkspaceConfig)
+
+    @model_validator(mode="after")
+    def ready_competition_requires_evaluation_contract(self) -> "ArenaConfig":
+        if self.competition.status == "ready":
+            missing: list[str] = []
+            if self.task is None:
+                missing.append("task")
+            if self.metric is None:
+                missing.append("metric")
+            if self.validation.active is None:
+                missing.append("validation.active")
+            if missing:
+                raise ValueError(
+                    "ready competition requires configured " + ", ".join(missing)
+                )
+        return self
 
 
 class SplitConfig(StrictModel):
@@ -133,10 +150,24 @@ class ValidationSpec(StrictModel):
     status: Literal["draft", "active", "deprecated"] = "draft"
     reason: str = Field(min_length=1)
     split: SplitConfig
-    metric: MetricConfig
-    prediction: PredictionConfig
+    metric: MetricConfig | None = None
+    prediction: PredictionConfig | None = None
     oof: OOFConfig = Field(default_factory=OOFConfig)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def active_validation_requires_metric_and_prediction(self) -> "ValidationSpec":
+        if self.status == "active":
+            missing: list[str] = []
+            if self.metric is None:
+                missing.append("metric")
+            if self.prediction is None:
+                missing.append("prediction")
+            if missing:
+                raise ValueError(
+                    "active validation requires configured " + ", ".join(missing)
+                )
+        return self
 
 
 class ExperimentParent(StrictModel):

@@ -112,3 +112,11 @@ def initialize_database(path: Path) -> None:
             connection.execute("INSERT INTO schema_meta(version) VALUES (?)", (SCHEMA_VERSION,))
         elif row[0] != SCHEMA_VERSION:
             raise RuntimeError(f"unsupported database schema version: {row[0]}")
+
+
+def read_schema_version(path: Path) -> int:
+    with sqlite3.connect(path) as connection:
+        row = connection.execute("SELECT version FROM schema_meta LIMIT 1").fetchone()
+    if row is None:
+        raise RuntimeError("database schema version is missing")
+    return int(row[0])
