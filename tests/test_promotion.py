@@ -8,6 +8,7 @@ from typer.testing import CliRunner
 from arenapilot.cli_entry import app
 from arenapilot.intake import configure_intake
 from arenapilot.memory import MemoryError, set_competition_fingerprint
+from arenapilot.memory_schema import initialize_workspace_memory_schema
 from arenapilot.memory_store import (
     create_knowledge_version,
     initialize_knowledge_database,
@@ -50,6 +51,7 @@ def _ready_workspace(tmp_path, slug: str):
         prediction_type=PredictionType.PROBABILITY,
     )
     activate_validation(workspace, "val-v1")
+    initialize_workspace_memory_schema(workspace.db_path)
     set_competition_fingerprint(
         workspace,
         observed={
