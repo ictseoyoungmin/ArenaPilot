@@ -6,6 +6,7 @@ from pathlib import Path
 import typer
 
 from . import __version__
+from .comparison import ComparisonError, compare_experiments
 from .db import initialize_database, read_schema_version
 from .experiments import (
     ExperimentError,
@@ -381,6 +382,56 @@ def experiment_list(
             return
         for item in experiments:
             typer.echo(f"{item['id']}  {item['status']}  {item['validation']}  {item['title']}")
+
+
+@experiment_app.command("compare")
+def experiment_compare(
+    baseline: str = typer.Argument(..., help="Baseline experiment ID."),
+    candidate: str = typer.Argument(..., help="Candidate experiment ID."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Compare canonical tracked runs inside one compatible validation domain."""
+    try:
+        workspace = discover_workspace()
+        comparison = compare_experiments(workspace, baseline, candidate)
+    except (ComparisonError, WorkspaceError, ValueError, OSError) as exc:
+        code = (
+            "COMPARISON_DOMAIN_MISMATCH"
+            if str(exc).startswith("COMPARISON_DOMAIN_MISMATCH")
+            else "EXPERIMENT_COMPARISON_FAILED"
+        )
+        _fail(code, exc, json_output)
+
+    payload = {"ok": True, **comparison}
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        metric = comparison["metric"]
+        folds = comparison["folds"]
+        runtime = comparison["runtime"]
+        typer.echo(
+            f"{baseline} -> {candidate}: {metric['name']} "
+            f"{comparison['baseline']['primary_metric']:.6g} -> "
+            f"{comparison['candidate']['primary_metric']:.6g}"
+        )
+        typer.echo(
+            f"Delta: {metric['raw_delta']:+.6g} "
+            f"(direction-normalized {metric['direction_normalized_delta']:+.6g}, "
+            f"{metric['outcome']})"
+        )
+        if folds["baseline_std"] is not None and folds["candidate_std"] is not None:
+            typer.echo(
+                f"Fold std: {folds['baseline_std']:.6g} -> {folds['candidate_std']:.6g} "
+                f"({folds['std_delta']:+.6g})"
+            )
+        if runtime["delta_seconds"] is not None:
+            typer.echo(f"Runtime delta: {runtime['delta_seconds']:+.3f}s")
+        if comparison["config_changes"]:
+            typer.echo("Config changes:")
+            for change in comparison["config_changes"]:
+                typer.echo(
+                    f"- {change['path']}: {change['baseline']!r} -> {change['candidate']!r}"
+                )
 
 
 @experiment_app.command("lineage")
