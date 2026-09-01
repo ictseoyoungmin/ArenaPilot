@@ -22,7 +22,7 @@ dev = [
 ]
 
 [project.scripts]
-arena = "arenapilot.cli:app"
+arena = "arenapilot.cli_entry:app"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
