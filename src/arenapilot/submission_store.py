@@ -65,6 +65,40 @@ def create_submission_record(
     return record
 
 
+def finalize_submission_artifact(
+    path: Path,
+    *,
+    competition_id: str,
+    name: str,
+    file_path: str,
+    file_sha256: str,
+) -> dict[str, object]:
+    initialize_database(path)
+    with sqlite3.connect(path) as connection:
+        cursor = connection.execute(
+            """
+            UPDATE submissions
+            SET file_path = ?, file_sha256 = ?
+            WHERE competition_id = ? AND name = ? AND status = 'created'
+            """,
+            (file_path, file_sha256, competition_id, name),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError(f"submission artifact cannot be finalized: {name}")
+    record = get_submission(path, competition_id, name)
+    assert record is not None
+    return record
+
+
+def delete_submission_record(path: Path, competition_id: str, name: str) -> None:
+    initialize_database(path)
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "DELETE FROM submissions WHERE competition_id = ? AND name = ? AND status = 'created'",
+            (competition_id, name),
+        )
+
+
 def get_submission(
     path: Path,
     competition_id: str,
