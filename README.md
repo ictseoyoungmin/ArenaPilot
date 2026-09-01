@@ -8,7 +8,7 @@ ArenaPilot is a local-first agent runtime for reproducible machine-learning comp
 
 - **Experiment != Run**: an experiment is intent; every execution creates a new run.
 - **Validation is versioned**: scores are only directly comparable inside a compatible validation domain.
-- **SQLite != MLflow**: ArenaPilot owns operational state; MLflow owns experiment telemetry and artifacts.
+- **SQLite != MLflow**: ArenaPilot owns operational state; MLflow owns experiment telemetry and copied artifacts.
 - **Memory is evidence-based**: cross-competition knowledge must retain supporting and contradicting evidence.
 - **CLI owns side effects**: agents edit declarative specs and use `arena` for mutations.
 
@@ -112,7 +112,7 @@ outputs/runs/run001/
 
 `result.json` must declare `status: success` and a finite primary metric matching the validation contract. `metrics.json` must contain that metric, and `fold_metrics.json` must contain the configured number of folds. Prediction/OOF artifacts must exist and be non-empty.
 
-The lifecycle distinguishes execution from verification:
+The lifecycle distinguishes execution, artifact verification, and tracking:
 
 ```text
 CREATED
@@ -124,6 +124,9 @@ COMPLETED
   ↓
 VERIFYING
   ├────────→ INVALID      artifact contract failed
+  ↓
+MLflow ingest
+  ├────────→ COMPLETED    tracking failed; retryable
   ↓
 VERIFIED
 ```
@@ -137,6 +140,34 @@ arena run list
 arena run show run001
 arena run logs run001
 arena run verify run001
+```
+
+## MLflow tracking and artifact index
+
+Training code never talks to MLflow directly. After the standard artifact contract passes, the ArenaPilot runtime logs parameters, metrics, per-fold metrics, and the run directory into MLflow, then atomically records the MLflow Run reference and local artifact index in Arena DB.
+
+The default tracking layout is:
+
+```text
+~/.arenapilot/
+├── mlflow.db
+└── mlartifacts/
+    └── kaggle/
+        └── <competition>/
+```
+
+Set `ARENAPILOT_HOME` to move or isolate this runtime state. MLflow experiments use the naming convention `arena/<platform>/<tracking.experiment_name>`.
+
+Arena DB schema v2 adds `artifact_refs`, which stores each verified artifact's kind, local file URI, SHA-256, and size. The first verified run for an experiment becomes its canonical run; later repeat executions remain separate evidence and do not replace it automatically.
+
+The ownership boundary remains explicit:
+
+```text
+Arena DB
+= run state, canonical run, artifact references, MLflow run ID
+
+MLflow
+= params, metrics, fold metrics, copied artifacts
 ```
 
 ## Workspace contract
@@ -174,4 +205,4 @@ pytest -q
 arena version
 ```
 
-MLflow ingestion, artifact indexing, Kaggle compute, and submissions remain subsequent slices.
+Experiment comparison, Kaggle compute, submissions, and cross-competition memory remain subsequent slices.
