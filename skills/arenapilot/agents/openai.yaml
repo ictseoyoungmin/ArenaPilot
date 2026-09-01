@@ -1,0 +1,7 @@
+interface:
+  display_name: "ArenaPilot"
+  short_description: "Run reproducible ML competition experiments and memory workflows"
+  default_prompt: "Use $arenapilot to inspect the current competition state, retrieve relevant prior knowledge, and run the next evidence-backed experiment through the ArenaPilot CLI."
+
+policy:
+  allow_implicit_invocation: true

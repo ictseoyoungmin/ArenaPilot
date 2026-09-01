@@ -10,7 +10,21 @@ ArenaPilot is a local-first agent runtime for reproducible machine-learning comp
 - **Validation is versioned**: scores are only directly comparable inside a compatible validation domain.
 - **SQLite != MLflow**: ArenaPilot owns operational state; MLflow owns experiment telemetry and copied artifacts.
 - **Memory is evidence-based**: cross-competition knowledge must retain supporting and contradicting evidence.
-- **CLI owns side effects**: agents edit declarative specs and use `arena` for mutations.
+- **CLI owns mutations**: agents use the `arena` CLI for runtime-managed state/spec changes; SQLite, MLflow, Kaggle provider writes, and runtime-managed YAML are not agent mutation surfaces.
+
+## Agent Skill contract
+
+ArenaPilot ships an agent skill under `skills/arenapilot/`. The skill owns scientific judgment while the runtime owns state, verification, tracking, provider side effects, and memory persistence.
+
+Before material agent work in an existing workspace, the Skill can verify the runtime handshake with:
+
+```bash
+arena contract --json
+arena status --json
+arena doctor --json
+```
+
+The current Skill requires Agent Contract v1. `skills/arenapilot/contract.yaml` is machine-readable and CI checks that its documented public command paths remain present.
 
 ## Bootstrap and configure a competition workspace
 
@@ -47,14 +61,19 @@ arena exp new \
   --hypothesis "A CatBoost baseline establishes the comparison floor." \
   --model-family catboost
 
-# edit experiments/exp001.yaml while it is still draft
-arena exp freeze exp001
+arena exp configure exp001 \
+  --model-params-json '{"depth":8,"learning_rate":0.04}' \
+  --pipeline-json '{"features":{"frequency_encoding":true}}' \
+  --seed 42
 
 arena exp show exp001
+arena exp freeze exp001
 arena exp list
 ```
 
-A frozen experiment is immutable. ArenaPilot stores its config hash in SQLite and an immutable snapshot under `outputs/specs/<experiment>/<hash>.yaml`. If the editable experiment YAML is changed after freeze, integrity checks report the mismatch and another freeze fails with `FROZEN_SPEC_MODIFIED`.
+`arena exp configure` is the supported agent authoring surface for draft model params, pipeline, seed, backend/resources, and tags. Validation binding and parent lineage remain fixed from creation. Once the Experiment is frozen, configure fails with `EXPERIMENT_CONFIG_IMMUTABLE`; create a new or derived Experiment instead of changing the frozen declaration.
+
+A frozen experiment is immutable. ArenaPilot stores its config hash in SQLite and an immutable snapshot under `outputs/specs/<experiment>/<hash>.yaml`. If the persisted declaration differs after freeze, integrity checks report the mismatch and another freeze fails with `FROZEN_SPEC_MODIFIED`.
 
 Derived experiments require a frozen parent:
 
@@ -345,4 +364,4 @@ pytest -q
 arena version
 ```
 
-Cross-competition memory remains the next major slice.
+The next major product step after the Agent Skill contract is dogfooding the full workflow on a real competition and closing runtime gaps exposed by that run.

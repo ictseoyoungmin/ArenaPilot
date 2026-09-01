@@ -1,0 +1,75 @@
+schema_version: 1
+skill: arenapilot
+required_runtime_contract_version: 1
+mutation_boundary: arena_cli
+workspace_resolution: ancestor_marker
+runtime_contract_command:
+  - arena
+  - contract
+  - --json
+public_command_paths:
+  - [contract]
+  - [status]
+  - [doctor]
+  - [intake, set]
+  - [validation, configure]
+  - [validation, activate]
+  - [exp, new]
+  - [exp, configure]
+  - [exp, freeze]
+  - [exp, run]
+  - [exp, show]
+  - [exp, list]
+  - [exp, compare]
+  - [exp, lineage]
+  - [run, show]
+  - [run, list]
+  - [run, logs]
+  - [run, verify]
+  - [remote, status]
+  - [remote, recover]
+  - [remote, logs]
+  - [submit, create]
+  - [submit, validate]
+  - [submit, send]
+  - [submit, status]
+  - [submit, budget]
+  - [submissions]
+  - [fingerprint, set]
+  - [fingerprint, show]
+  - [evidence, compare]
+  - [evidence, note]
+  - [evidence, list]
+  - [finding, create]
+  - [finding, approve]
+  - [finding, show]
+  - [finding, list]
+  - [learn]
+  - [failure, list]
+  - [independence, set]
+  - [independence, show]
+  - [technique, register]
+  - [technique, list]
+  - [technique, show]
+  - [technique, deprecate]
+  - [knowledge, retrieve]
+  - [knowledge, show]
+  - [knowledge, assess]
+  - [knowledge, approve]
+  - [knowledge, deprecate]
+  - [knowledge, history]
+  - [knowledge, ranked]
+references:
+  - references/workflow.md
+  - references/validation-and-experiments.md
+  - references/execution-and-recovery.md
+  - references/submissions.md
+  - references/memory-and-knowledge.md
+  - references/current-scope.md
+forbidden_mutations:
+  - direct_arena_sqlite_write
+  - direct_knowledge_sqlite_write
+  - direct_mlflow_write
+  - direct_kaggle_kernel_api_write
+  - direct_kaggle_submission_api_write
+  - direct_runtime_managed_yaml_write

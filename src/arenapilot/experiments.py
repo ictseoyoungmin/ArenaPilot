@@ -105,6 +105,56 @@ def create_experiment(
     return spec
 
 
+def configure_experiment(
+    workspace: Workspace,
+    name: str,
+    *,
+    model_params: dict[str, object] | None = None,
+    pipeline: dict[str, object] | None = None,
+    seed: int | None = None,
+    backend: str | None = None,
+    resources: dict[str, object] | None = None,
+    tags: list[str] | None = None,
+) -> ExperimentSpec:
+    """Update agent-authorable fields of a draft Experiment through the runtime boundary."""
+    row = get_experiment(workspace.db_path, workspace.competition_id, name)
+    if row is None:
+        raise ExperimentError(f"experiment not found: {name}")
+    if row["status"] != "draft":
+        raise ExperimentError(f"experiment configuration is immutable after freeze: {name}")
+
+    spec = load_experiment_spec(workspace, name)
+    if spec.id != name:
+        raise ExperimentError(f"experiment spec id mismatch: expected {name}, got {spec.id}")
+    if spec.validation != row["validation_id"]:
+        raise ExperimentError("experiment validation binding cannot be changed after creation")
+    _validate_lineage_matches_db(workspace, row, spec)
+
+    payload = spec.model_dump(mode="json")
+    if model_params is not None:
+        model = dict(payload["model"])
+        model["params"] = model_params
+        payload["model"] = model
+    if pipeline is not None:
+        payload["pipeline"] = pipeline
+    if seed is not None:
+        payload["seed"] = {"policy": "fixed", "value": seed}
+    if backend is not None:
+        runtime = dict(payload["runtime"])
+        runtime["backend"] = backend
+        payload["runtime"] = runtime
+    if resources is not None:
+        runtime = dict(payload["runtime"])
+        runtime["resources"] = resources
+        payload["runtime"] = runtime
+    if tags is not None:
+        payload["tags"] = tags
+
+    updated = ExperimentSpec.model_validate(payload)
+    save_experiment_spec(workspace, updated)
+    return updated
+
+
 def _validate_lineage_matches_db(workspace: Workspace, row: dict[str, object], spec: ExperimentSpec) -> None:
     persisted = {
         (str(parent["name"]), str(parent["relation"]))
