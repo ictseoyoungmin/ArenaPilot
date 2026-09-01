@@ -4,19 +4,96 @@ ArenaPilot is a local-first agent runtime for reproducible machine-learning comp
 
 > Agents may forget. ArenaPilot should not.
 
-## Core contract
+ArenaPilot gives an AI coding agent a stable laboratory for competition work. The agent makes scientific decisions; ArenaPilot owns experiment identity, validation contracts, execution state, artifact verification, MLflow tracking, Kaggle remote jobs and submissions, and reusable cross-competition memory.
 
-- **Experiment != Run**: an experiment is intent; every execution creates a new run.
-- **Validation is versioned**: scores are only directly comparable inside a compatible validation domain.
-- **SQLite != MLflow**: ArenaPilot owns operational state; MLflow owns experiment telemetry and copied artifacts.
-- **Memory is evidence-based**: cross-competition knowledge must retain supporting and contradicting evidence.
-- **CLI owns mutations**: agents use the `arena` CLI for runtime-managed state/spec changes; SQLite, MLflow, Kaggle provider writes, and runtime-managed YAML are not agent mutation surfaces.
+```text
+AI coding agent
+      ↓ scientific judgment
+ArenaPilot Skill
+      ↓ supported CLI
+arena runtime
+      ├── validation
+      ├── experiments / runs
+      ├── local + Kaggle execution
+      ├── MLflow tracking
+      ├── comparison
+      ├── submissions
+      └── evidence / knowledge
+```
 
-## Agent Skill contract
+## Quick start
 
-ArenaPilot ships an agent skill under `skills/arenapilot/`. The skill owns scientific judgment while the runtime owns state, verification, tracking, provider side effects, and memory persistence.
+ArenaPilot currently requires Python 3.12+ and is installed from the repository.
 
-Before material agent work in an existing workspace, the Skill can verify the runtime handshake with:
+```bash
+git clone https://github.com/ictseoyoungmin/ArenaPilot.git
+cd ArenaPilot
+
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .
+
+arena version
+arena contract --json
+```
+
+Keep the ArenaPilot runtime checkout separate from competition workspaces. A typical layout is:
+
+```text
+~/src/ArenaPilot/        # runtime + Skill
+~/arenas/
+├── titanic/             # competition workspace
+├── playground-s6e9/
+└── another-competition/
+```
+
+Create a workspace from a separate competitions directory:
+
+```bash
+mkdir -p ~/arenas
+cd ~/arenas
+
+arena init kaggle:titanic
+cd titanic
+
+arena status --json
+arena doctor --json
+```
+
+`arena init` creates a draft workspace. It deliberately does not invent the target, metric, prediction semantics, or validation strategy.
+
+### Data preparation today
+
+ArenaPilot does not yet manage Kaggle competition metadata or dataset download. Put the competition files under the workspace yourself before asking an agent to build the training pipeline.
+
+For example:
+
+```text
+~/arenas/titanic/
+└── data/
+    └── raw/
+        ├── train.csv
+        ├── test.csv
+        └── gender_submission.csv
+```
+
+For Kaggle remote execution and submissions, configure the official Kaggle CLI credentials in the normal Kaggle environment. ArenaPilot wraps the official `kaggle` CLI rather than storing provider credentials itself.
+
+## Using ArenaPilot with an AI coding agent
+
+ArenaPilot is designed for coding agents that can read files, edit competition source code, and execute local shell commands. Codex, Claude Code, and similar shell-capable coding agents can use the same runtime contract.
+
+The authoritative agent instructions live at:
+
+```text
+/path/to/ArenaPilot/skills/arenapilot/SKILL.md
+```
+
+Start a new agent session in the competition workspace and tell the agent to read that Skill before making ArenaPilot-managed changes. A generic prompt is:
+
+> Use ArenaPilot to work on this Kaggle competition. First read `/path/to/ArenaPilot/skills/arenapilot/SKILL.md` and the references it requires. Use the `arena` CLI for all ArenaPilot-managed state changes. Do not write Arena DB, MLflow state, Kaggle provider state, knowledge databases, validation specs, or experiment specs directly. Start with `arena contract --json`, `arena status --json`, and `arena doctor --json`. Inspect the competition data and source code, make scientific decisions yourself, and use only runtime capabilities that actually exist.
+
+The Skill/runtime handshake is:
 
 ```bash
 arena contract --json
@@ -24,58 +101,130 @@ arena status --json
 arena doctor --json
 ```
 
-The current Skill requires Agent Contract v1. `skills/arenapilot/contract.yaml` is machine-readable and CI checks that its documented public command paths remain present.
+The current Skill requires **Agent Contract v1**. `skills/arenapilot/contract.yaml` is machine-readable, and CI checks that the public command paths declared by the Skill still exist in the runtime.
 
-## Bootstrap and configure a competition workspace
+### Agent vs Runtime boundary
+
+```text
+Agent
+= inspect data and code
+= choose validation strategy
+= form hypotheses
+= implement src/train.py and feature/model code
+= interpret results
+= decide what to try next
+
+ArenaPilot CLI
+= supported mutation boundary
+
+ArenaPilot Runtime
+= workspace state
+= validation/experiment identity
+= immutable snapshots
+= run lifecycle
+= artifact verification
+= MLflow ingestion
+= Kaggle remote execution
+= submission state
+= evidence and knowledge persistence
+```
+
+The agent may read workspace files, logs, artifacts, and source code. It should not directly mutate `.arena/arena.db`, MLflow databases, Kaggle provider state, the global knowledge database, or Runtime-managed experiment/validation declarations.
+
+## Typical competition workflow
+
+A normal ArenaPilot workflow looks like this:
+
+```text
+create workspace
+      ↓
+inspect competition + data
+      ↓
+configure intake
+      ↓
+configure + activate validation
+      ↓
+retrieve relevant prior knowledge
+      ↓
+create hypothesis / experiment
+      ↓
+configure + freeze experiment
+      ↓
+run locally or on Kaggle
+      ↓
+verify artifacts + ingest MLflow
+      ↓
+compare experiments
+      ↓
+create / validate / send submission
+      ↓
+record evidence + finding
+      ↓
+learn into cross-competition knowledge
+      ↓
+next hypothesis
+```
+
+ArenaPilot does not try to be AutoML. The agent remains responsible for scientific judgment and training code.
+
+## Configure the competition contract
+
+After inspecting the competition, record the task and primary metric:
 
 ```bash
-arena init kaggle:titanic
-cd titanic
-
 arena intake set \
   --task binary_classification \
   --target Survived \
   --metric roc_auc \
   --direction maximize
+```
 
+Configure the initial validation contract:
+
+```bash
 arena validation configure val-v1 \
   --split stratified_kfold \
   --prediction probability
 
 arena validation activate val-v1
-arena status
-arena doctor
+arena status --json
 ```
 
-`arena init` intentionally creates a **draft** workspace. At init time ArenaPilot may not yet know the target, metric, prediction semantics, or leakage-safe validation strategy. `arena intake set` records the competition task contract, and `arena validation configure` fills the draft validation using that primary metric. Only a complete, compatible validation can be activated; activation promotes the competition to `ready` and records validation/spec hashes in SQLite.
+Only a complete, compatible validation can be activated. Activation promotes the competition from `draft` to `ready` and persists validation/spec hashes in SQLite.
 
-Once a validation is active, the competition intake contract is immutable in v0. Changing target or metric later must be handled as an explicit migration rather than silently rewriting the evaluation history.
+Once the competition is ready, its task/target/metric contract is immutable in the current runtime. Silent evaluation-contract changes are intentionally forbidden.
 
-## Create and freeze experiments
+## Create experiments
 
-Experiments can only be created after the competition is `ready`. Each experiment is automatically bound to the active validation and receives the next stable human-readable ID.
+An Experiment is scientific intent, not an execution.
 
 ```bash
 arena exp new \
   --title baseline \
   --hypothesis "A CatBoost baseline establishes the comparison floor." \
-  --model-family catboost
+  --model-family catboost \
+  --json
+```
 
+Configure the draft through the CLI rather than editing the Runtime-managed experiment YAML:
+
+```bash
 arena exp configure exp001 \
   --model-params-json '{"depth":8,"learning_rate":0.04}' \
   --pipeline-json '{"features":{"frequency_encoding":true}}' \
-  --seed 42
-
-arena exp show exp001
-arena exp freeze exp001
-arena exp list
+  --seed 42 \
+  --tag baseline \
+  --json
 ```
 
-`arena exp configure` is the supported agent authoring surface for draft model params, pipeline, seed, backend/resources, and tags. Validation binding and parent lineage remain fixed from creation. Once the Experiment is frozen, configure fails with `EXPERIMENT_CONFIG_IMMUTABLE`; create a new or derived Experiment instead of changing the frozen declaration.
+Review and freeze it:
 
-A frozen experiment is immutable. ArenaPilot stores its config hash in SQLite and an immutable snapshot under `outputs/specs/<experiment>/<hash>.yaml`. If the persisted declaration differs after freeze, integrity checks report the mismatch and another freeze fails with `FROZEN_SPEC_MODIFIED`.
+```bash
+arena exp show exp001 --json
+arena exp freeze exp001 --json
+```
 
-Derived experiments require a frozen parent:
+A frozen Experiment is immutable. Changing it requires a new Experiment rather than rewriting history. Derived experiments can reference a frozen parent:
 
 ```bash
 arena exp new \
@@ -84,24 +233,27 @@ arena exp new \
   --hypothesis "Frequency encoding improves high-cardinality categoricals." \
   --model-family catboost
 
-arena exp lineage exp002
+arena exp lineage exp002 --json
 ```
 
-## Execute local runs
+The core invariant is:
 
-A frozen experiment can be executed locally with:
-
-```bash
-arena exp run exp001
+```text
+Experiment = Intent
+Run        = Execution
 ```
 
-Every execution creates a distinct Run (`run001`, `run002`, ...). ArenaPilot launches the workspace entrypoint as:
+Every execution creates a new Run even when the Experiment is unchanged.
+
+## Training entrypoint and artifact contract
+
+The workspace training entrypoint is:
 
 ```bash
 python -m src.train
 ```
 
-The training process receives these environment variables:
+ArenaPilot supplies:
 
 ```text
 ARENA_RUN_ID
@@ -111,9 +263,7 @@ ARENA_OUTPUT_DIR
 ARENA_DATA_DIR
 ```
 
-The process writes its output into `ARENA_OUTPUT_DIR`. ArenaPilot itself snapshots `spec.yaml`, `validation.yaml`, `environment.json`, and captured `logs.txt` into the same run directory.
-
-For a normal cross-validation run, verification requires:
+Training code writes to `ARENA_OUTPUT_DIR`. For a normal cross-validation run, the expected output contract is:
 
 ```text
 outputs/runs/run001/
@@ -130,205 +280,237 @@ outputs/runs/run001/
 └── manifest.json
 ```
 
-`result.json` must declare `status: success` and a finite primary metric matching the validation contract. `metrics.json` must contain that metric, and `fold_metrics.json` must contain the configured number of folds. Prediction/OOF artifacts must exist and be non-empty.
-
-The lifecycle distinguishes execution, artifact verification, and tracking:
+A process exit code of zero is not sufficient for success. ArenaPilot verifies required artifacts and metric semantics before a Run becomes `VERIFIED`.
 
 ```text
 CREATED
   ↓
 RUNNING
-  ├────────→ FAILED       process failed
+  ├────────→ FAILED
   ↓
 COMPLETED
   ↓
 VERIFYING
-  ├────────→ INVALID      artifact contract failed
+  ├────────→ INVALID
   ↓
 MLflow ingest
-  ├────────→ COMPLETED    tracking failed; retryable
+  ├────────→ COMPLETED    tracking failure; retryable
   ↓
 VERIFIED
 ```
 
-A process exit code of zero is therefore not enough to make a valid ArenaPilot run.
+## Run locally
 
-Inspect runs with:
+Execute a frozen Experiment locally:
 
 ```bash
-arena run list
-arena run show run001
-arena run logs run001
-arena run verify run001
+arena exp run exp001 --backend local --json
 ```
 
-## MLflow tracking and artifact index
+Inspect the result:
 
-Training code never talks to MLflow directly. After the standard artifact contract passes, the ArenaPilot runtime logs parameters, metrics, per-fold metrics, and the run directory into MLflow, then atomically records the MLflow Run reference and local artifact index in Arena DB.
+```bash
+arena run list --json
+arena run show run001 --json
+arena run logs run001
+arena run verify run001 --json
+```
 
-The default tracking layout is:
+The first VERIFIED Run becomes the Experiment's canonical Run. Repeat runs remain separate evidence and do not automatically replace it.
+
+## Run on Kaggle compute
+
+ArenaPilot uses the official Kaggle CLI as a provider adapter. Set the non-secret owner name and dispatch a frozen Experiment:
+
+```bash
+export ARENA_KAGGLE_OWNER=<kaggle-username>
+arena exp run exp001 --backend kaggle --json
+```
+
+Remote execution is asynchronous. ArenaPilot creates a self-contained bundle, submits a Kaggle kernel, and records the provider job in the workspace database.
+
+```bash
+arena remote status run001 --json
+arena remote logs run001
+arena remote recover run001 --json
+```
+
+A Kaggle kernel completing does not make the Run VERIFIED. `remote recover` pulls the output back into the workspace and sends it through the same artifact verification and MLflow ingestion path as a local Run.
+
+## MLflow tracking
+
+Training code does not talk to MLflow directly. ArenaPilot ingests a successfully verified artifact set after execution.
+
+By default, Runtime tracking state lives under `ARENAPILOT_HOME` (or the default ArenaPilot home):
 
 ```text
 ~/.arenapilot/
 ├── mlflow.db
-└── mlartifacts/
-    └── kaggle/
-        └── <competition>/
+├── mlartifacts/
+└── knowledge.db
 ```
 
-Set `ARENAPILOT_HOME` to move or isolate this runtime state. MLflow experiments use the naming convention `arena/<platform>/<tracking.experiment_name>`.
-
-Arena DB schema v2 adds `artifact_refs`, which stores each verified artifact's kind, local file URI, SHA-256, and size. The first verified run for an experiment becomes its canonical run; later repeat executions remain separate evidence and do not replace it automatically.
-
-The ownership boundary remains explicit:
+Arena DB is the operational control plane; MLflow stores experiment telemetry and copied artifacts.
 
 ```text
 Arena DB
-= run state, canonical run, artifact references, MLflow run ID
+= Experiment / Run / Submission state
+= canonical Run
+= artifact references
+= MLflow Run ID
 
 MLflow
-= params, metrics, fold metrics, copied artifacts
+= params
+= metrics
+= fold metrics
+= copied Run artifacts
 ```
 
 ## Compare experiments
 
-Only canonical VERIFIED Runs in the same comparison domain can be compared directly:
+ArenaPilot compares only canonical VERIFIED Runs inside the same validation comparison domain:
 
 ```bash
-arena exp compare exp001 exp002
 arena exp compare exp001 exp002 --json
 ```
 
-ArenaPilot checks `comparison_domain_hash` before reading metric deltas. If validation domains differ, comparison fails with `COMPARISON_DOMAIN_MISMATCH`; there is intentionally no force flag that would turn incompatible scores into a misleading numeric delta.
+A comparison reports the primary metric delta, a direction-normalized delta, fold-level changes, fold stability, runtime delta when available, and model/pipeline/seed/runtime configuration changes.
 
-A successful comparison reports:
-
-```text
-primary metric: baseline -> candidate
-raw delta: candidate - baseline
-direction-normalized delta: positive always means improvement
-fold-by-fold deltas
-fold standard deviation change
-runtime delta when recorded
-model / pipeline / seed / runtime config changes
-```
-
-The comparison uses the Experiment's pinned canonical Run rather than automatically choosing the best repeat/seed Run. This avoids turning repeated executions into implicit leaderboard-style cherry-picking.
-
-## Execute on Kaggle compute
-
-ArenaPilot uses the official Kaggle CLI as a provider adapter. A frozen Experiment can be dispatched without changing its artifact or MLflow contract:
-
-```bash
-export ARENA_KAGGLE_OWNER=<kaggle-username>
-arena exp run exp001 --backend kaggle
-```
-
-The default remote behavior is asynchronous. ArenaPilot creates a new Run, builds a self-contained script bundle under `.arena/bundles/<run>`, pushes it with `kaggle kernels push`, records the provider job in SQLite, and returns the Run in `queued` state.
-
-The bundle embeds the workspace `src/` tree and materializes it in the Kaggle runtime before invoking the same entrypoint:
-
-```bash
-python -m src.train
-```
-
-The remote process receives the same Arena environment contract. `ARENA_DATA_DIR` points to `/kaggle/input/<competition-slug>` and `ARENA_OUTPUT_DIR` points to `/kaggle/working`. The competition itself is attached through `competition_sources` in `kernel-metadata.json`.
-
-Synchronize or diagnose a remote Run with:
-
-```bash
-arena remote status run001
-arena remote logs run001
-arena remote recover run001
-```
-
-Recovery only proceeds after Kaggle reports the kernel complete. ArenaPilot downloads the latest kernel output, places it under `outputs/runs/<run>`, and then sends those files through the exact same local verification and MLflow-ingestion path. A Kaggle process is therefore not considered VERIFIED merely because the provider reports completion.
-
-Remote state is intentionally split:
+If validation domains differ, comparison fails with:
 
 ```text
-Arena Run
-created -> queued -> running -> completed -> verifying -> verified
-
-Remote Job
-created -> submitted -> queued/running -> completed/failed
-
-Recovery
-pending -> pulled -> verified/failed
+COMPARISON_DOMAIN_MISMATCH
 ```
 
-Arena DB schema v3 adds `remote_jobs`, including the provider kernel reference, bundle path, provider state, and recovery state. Kaggle credentials remain outside ArenaPilot state. The non-secret owner name is resolved from `ARENA_KAGGLE_OWNER`, `KAGGLE_USERNAME`, or legacy `~/.kaggle/kaggle.json` metadata.
+There is intentionally no force flag that converts incompatible scores into a misleading numeric comparison.
 
-`compute.kaggle.accelerator: gpu` uses Kaggle's default GPU selection. A concrete accelerator ID in `arena.yaml` is forwarded to `kaggle kernels push --accelerator`.
+## Create and send submissions
 
-## Submit verified evidence
+A Submission is separate from both the Experiment and the Run. `predictions.parquet` remains experiment evidence; the provider-ready CSV may contain calibration, clipping, blending, ranking, or other submission-specific transformations.
 
-A submission is a separate entity from its Experiment and Run. `predictions.parquet` remains experiment evidence, while `submission.csv` is the provider-ready representation that may include calibration, blending, ranking, clipping, or other submission-specific post-processing.
-
-Create an immutable submission artifact from a VERIFIED Run:
+Create an immutable submission record from a VERIFIED Run:
 
 ```bash
-arena submit create --run run001
-# or explicitly choose a provider-ready CSV
-arena submit create --run run001 --file reports/blend.csv --message "blend v1"
+arena submit create --run run001 --json
 ```
 
-Without `--file`, ArenaPilot expects `outputs/runs/<run>/submission.csv`. It copies the exact bytes to `submissions/subXXX.csv` and stores the SHA-256 in Arena DB so later edits cannot silently change what was reviewed for submission.
+Or explicitly choose a provider-ready CSV:
+
+```bash
+arena submit create \
+  --run run001 \
+  --file reports/blend.csv \
+  --message "blend v1" \
+  --json
+```
 
 Validate it against the competition sample submission:
 
 ```bash
-arena submit validate sub001
-# when the competition uses a nonstandard sample filename
-arena submit validate sub001 --sample data/raw/gender_submission.csv
+arena submit validate sub001 --json
+# nonstandard sample filename:
+arena submit validate sub001 --sample data/raw/gender_submission.csv --json
 ```
 
-Validation checks exact headers, row count, first-column ID values and order, duplicate IDs, blank cells, and prediction semantics from the source Run's validation snapshot. Probability predictions must be finite and inside `[0, 1]`; value predictions must be finite.
-
-Only a validated submission can be sent:
+Check the local submission budget and optionally provider limits:
 
 ```bash
-arena submit budget
-arena submit budget --provider
-arena submit send sub001 --message "exp017 frequency encoding"
+arena submit budget --json
+arena submit budget --provider --json
 ```
 
-ArenaPilot enforces `submission.daily_budget` and `submission.total_budget` from `arena.yaml` immediately before the Kaggle call. A budget of `0` means unlimited. Local daily accounting uses UTC. `--provider` additionally asks the official Kaggle CLI for the team's current provider-side submission limits.
-
-Kaggle returns a numeric submission reference, which is stored with the exact file hash and source Run. Synchronize scoring later with:
+Then send explicitly:
 
 ```bash
-arena submit status sub001
-arena submissions --sync
+arena submit send sub001 --message "baseline submission" --json
 ```
 
-The lifecycle is:
+Synchronize status and scores later:
+
+```bash
+arena submit status sub001 --json
+arena submissions --sync --json
+```
+
+Only VERIFIED Runs can source submissions, and ArenaPilot preserves the exact submitted file hash and Run lineage.
+
+## Cross-competition memory
+
+ArenaPilot separates immutable facts from interpretation and reusable knowledge:
 
 ```text
-VERIFIED Run
-    ↓
-submission.csv / explicit CSV
-    ↓
-CREATED
-    ↓
-sample/schema validation
-    ↓
-VALIDATED
-    ↓
-Arena budget gate
-    ↓
-kaggle competitions submit
-    ↓
-SUBMITTED / PENDING
-    ↓
-score synchronization
-    ↓
-SCORED / FAILED
+Run / Submission
+      ↓
+Evidence
+      ↓
+competition-local Finding
+      ↓ explicit approval
+Knowledge candidate
+      ↓ independence-aware assessment
+promoted reusable Knowledge
 ```
 
-Arena DB schema v4 adds `submissions`, preserving source Run lineage, immutable file hash, provider reference, message, public/private scores, and timestamps. Creating several submissions from the same Run is allowed; each is independent evidence of the exact representation sent to the provider.
+Record a competition fingerprint while keeping observed facts separate from inferred structure:
 
-## Workspace contract
+```bash
+arena fingerprint set \
+  --observed-json '{"dataset":{"high_cardinality":true}}' \
+  --inferred-json '{"structure":{"grouped":false}}' \
+  --json
+```
+
+Create comparison-backed evidence:
+
+```bash
+arena evidence compare \
+  --subject technique:frequency_encoding \
+  --baseline exp001 \
+  --candidate exp002 \
+  --summary "Frequency encoding improved canonical CV." \
+  --json
+```
+
+Interpret it locally:
+
+```bash
+arena finding create \
+  --subject technique:frequency_encoding \
+  --conclusion supported \
+  --summary "Frequency encoding helped this competition." \
+  --evidence evidence001 \
+  --confidence medium \
+  --json
+
+arena finding approve finding001 --json
+arena learn --finding finding001 --json
+```
+
+Retrieve prior knowledge for a new competition:
+
+```bash
+arena knowledge ranked --json
+arena knowledge ranked --query encoding --json
+```
+
+Knowledge retrieval is prior context, not proof that a technique will work. Supporting and contradictory evidence are both preserved.
+
+For dependency-aware promotion across related competitions, ArenaPilot also provides `arena independence`, `arena technique`, and `arena knowledge assess/approve/history/deprecate`.
+
+## Core contract
+
+ArenaPilot is built around a few invariants:
+
+- **Experiment != Run** — an Experiment is intent; every execution creates a new Run.
+- **Frozen Experiments are immutable** — retries and variations become new Runs or Experiments.
+- **Validation defines comparability** — scores are directly comparable only inside a compatible comparison domain.
+- **Process success != VERIFIED Run** — artifacts and metrics must pass Runtime verification.
+- **Arena DB != MLflow** — Arena DB owns operational state; MLflow owns telemetry and copied artifacts.
+- **Remote jobs do not write directly to local MLflow** — outputs return through ArenaPilot verification first.
+- **Submission != prediction artifact** — provider-ready representations keep exact source and file lineage.
+- **Memory is evidence-based** — Findings and Knowledge keep their supporting and contradicting Evidence.
+- **The `arena` CLI owns Runtime mutations** — agents do not bypass it to rewrite Runtime-managed state.
+
+## Workspace layout
 
 ```text
 competition/
@@ -339,7 +521,9 @@ competition/
 │   └── pipelines/
 ├── experiments/
 ├── src/
-├── data/{raw,processed}/
+├── data/
+│   ├── raw/
+│   └── processed/
 ├── outputs/
 │   ├── runs/
 │   └── specs/
@@ -352,9 +536,45 @@ competition/
     └── arena.db
 ```
 
-Creation is staged in a sibling temporary directory and renamed into place only after all required files and the SQLite database are initialized, so a failed init does not leave a partially-created workspace at the requested destination.
+Workspace discovery walks upward from the current directory, so `arena` commands can be run from nested source/report directories inside the competition workspace.
+
+## Current scope
+
+ArenaPilot currently provides the Runtime contract for Kaggle competition workspaces, versioned validation, Experiment/Run lifecycle, local and Kaggle kernel execution, artifact verification, MLflow tracking, comparable Experiment analysis, submissions, and evidence-based cross-competition memory.
+
+The following are intentionally **not** current Runtime capabilities:
+
+- Arena-managed Kaggle competition metadata inspection or dataset download.
+- validation `val-v2+` creation/migration workflows.
+- generic AutoML/HPO services.
+- automatic submission without an explicit `arena submit send` call.
+- hosted or multi-user control plane.
+
+Agents should report these boundaries rather than inventing commands or silently bypassing the Runtime.
+
+## Skill references
+
+The agent-facing contract is under `skills/arenapilot/`:
+
+```text
+skills/arenapilot/
+├── SKILL.md
+├── contract.yaml
+├── agents/openai.yaml
+└── references/
+    ├── workflow.md
+    ├── validation-and-experiments.md
+    ├── execution-and-recovery.md
+    ├── submissions.md
+    ├── memory-and-knowledge.md
+    └── current-scope.md
+```
+
+Use these references for the exact agent workflow and capability boundaries. `arena contract --json` is the Runtime-side handshake for that Skill.
 
 ## Development
+
+For contributors:
 
 ```bash
 python -m venv .venv
@@ -362,6 +582,5 @@ source .venv/bin/activate
 pip install -e '.[dev]'
 pytest -q
 arena version
+arena contract --json
 ```
-
-The next major product step after the Agent Skill contract is dogfooding the full workflow on a real competition and closing runtime gaps exposed by that run.
