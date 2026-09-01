@@ -16,8 +16,21 @@ import yaml
 from .db import get_experiment
 from .experiments import ExperimentError, freeze_experiment
 from .models import ExperimentSpec, ValidationSpec
-from .runstore import create_run_record, get_run, list_runs, transition_run
-from .workspace import Workspace, WorkspaceError, load_experiment_spec
+from .runstore import (
+    create_run_record,
+    finalize_verified_run,
+    get_run,
+    list_artifact_refs,
+    list_runs,
+    transition_run,
+)
+from .tracking import TrackingError, ingest_verified_run, mlflow_run_summary
+from .workspace import (
+    Workspace,
+    WorkspaceError,
+    load_arena_config,
+    load_experiment_spec,
+)
 
 
 class RunError(WorkspaceError):
@@ -88,6 +101,60 @@ def _manifest_for_directory(
     manifest_path = run_dir / "manifest.json"
     _write_json(manifest_path, payload)
     return manifest_path, _sha256_file(manifest_path)
+
+
+def _artifact_kind(relative_path: str) -> str:
+    name = Path(relative_path).name
+    mapping = {
+        "spec.yaml": "spec",
+        "validation.yaml": "validation",
+        "environment.json": "environment",
+        "result.json": "result",
+        "metrics.json": "metrics",
+        "fold_metrics.json": "fold_metrics",
+        "oof.parquet": "oof",
+        "predictions.parquet": "predictions",
+        "logs.txt": "log",
+        "manifest.json": "manifest",
+    }
+    if name in mapping:
+        return mapping[name]
+    if relative_path.startswith("models/") or relative_path.startswith("artifacts/models/"):
+        return "model"
+    if "feature_importance" in name:
+        return "feature_importance"
+    return "other"
+
+
+def _artifact_index(run_dir: Path, manifest_path: Path) -> list[dict[str, object]]:
+    manifest = _read_json(manifest_path)
+    files = manifest.get("files") if isinstance(manifest, dict) else None
+    if not isinstance(files, list):
+        raise RunError("manifest.json does not contain files")
+
+    artifacts: list[dict[str, object]] = []
+    for item in files:
+        if not isinstance(item, dict):
+            continue
+        relative = str(item["path"])
+        path = (run_dir / relative).resolve()
+        artifacts.append(
+            {
+                "kind": _artifact_kind(relative),
+                "uri": path.as_uri(),
+                "sha256": str(item["sha256"]),
+                "size_bytes": int(item["size"]),
+            }
+        )
+    artifacts.append(
+        {
+            "kind": "manifest",
+            "uri": manifest_path.resolve().as_uri(),
+            "sha256": _sha256_file(manifest_path),
+            "size_bytes": manifest_path.stat().st_size,
+        }
+    )
+    return artifacts
 
 
 def _load_run_specs(run_dir: Path) -> tuple[ExperimentSpec, ValidationSpec]:
@@ -169,9 +236,9 @@ def verify_run(workspace: Workspace, name: str) -> dict[str, object]:
     row = get_run(workspace.db_path, workspace.competition_id, name)
     if row is None:
         raise RunError(f"run not found: {name}")
-    if row["status"] == "verified":
+    if row["status"] == "verified" and row.get("mlflow_run_id"):
         return row
-    if row["status"] not in {"completed", "invalid"}:
+    if row["status"] not in {"completed", "invalid", "verified"}:
         raise RunError(f"run cannot be verified from status {row['status']}")
 
     transition_run(
@@ -181,6 +248,8 @@ def verify_run(workspace: Workspace, name: str) -> dict[str, object]:
         from_statuses={str(row["status"])},
         to_status="verifying",
     )
+    row = get_run(workspace.db_path, workspace.competition_id, name)
+    assert row is not None
     run_dir = _run_dir(workspace, name)
     try:
         _validate_artifacts(run_dir, row)
@@ -209,15 +278,40 @@ def verify_run(workspace: Workspace, name: str) -> dict[str, object]:
             raise
         raise RunError(str(exc)) from exc
 
-    return transition_run(
-        workspace.db_path,
-        competition_id=workspace.competition_id,
-        name=name,
-        from_statuses={"verifying"},
-        to_status="verified",
-        manifest_path=str(manifest_path),
-        manifest_hash=manifest_hash,
-    )
+    experiment_spec, _ = _load_run_specs(run_dir)
+    try:
+        mlflow_run_id = ingest_verified_run(
+            workspace,
+            row,
+            run_dir,
+            experiment_spec,
+        )
+        artifacts = _artifact_index(run_dir, manifest_path)
+        return finalize_verified_run(
+            workspace.db_path,
+            competition_id=workspace.competition_id,
+            name=name,
+            manifest_path=str(manifest_path),
+            manifest_hash=manifest_hash,
+            mlflow_run_id=mlflow_run_id,
+            artifacts=artifacts,
+        )
+    except Exception as exc:
+        try:
+            transition_run(
+                workspace.db_path,
+                competition_id=workspace.competition_id,
+                name=name,
+                from_statuses={"verifying"},
+                to_status="completed",
+                manifest_path=str(manifest_path),
+                manifest_hash=manifest_hash,
+            )
+        except Exception:
+            pass
+        if isinstance(exc, (RunError, TrackingError)):
+            raise RunError(str(exc)) from exc
+        raise RunError(f"MLFLOW_INGEST_FAILED: {exc}") from exc
 
 
 def run_local_experiment(
@@ -350,21 +444,44 @@ def show_run(workspace: Workspace, name: str) -> dict[str, object]:
     manifest_path = row.get("artifact_manifest_path")
     if manifest_path and Path(str(manifest_path)).is_file():
         manifest = _read_json(Path(str(manifest_path)))
-    return {"record": row, "manifest": manifest}
+    config = load_arena_config(workspace)
+    metric_name = config.metric.name if config.metric else None
+    tracking = mlflow_run_summary(
+        str(row["mlflow_run_id"]) if row.get("mlflow_run_id") else None,
+        metric_name,
+    )
+    artifacts = list_artifact_refs(workspace.db_path, str(row["id"]))
+    return {
+        "record": row,
+        "manifest": manifest,
+        "tracking": tracking,
+        "artifacts": artifacts,
+    }
 
 
 def list_run_summaries(workspace: Workspace) -> list[dict[str, object]]:
-    return [
-        {
-            "id": row["name"],
-            "experiment": row["experiment_name"],
-            "status": row["status"],
-            "backend": row["backend"],
-            "exit_code": row["exit_code"],
-            "manifest_hash": row["artifact_manifest_hash"],
-        }
-        for row in list_runs(workspace.db_path, workspace.competition_id)
-    ]
+    config = load_arena_config(workspace)
+    metric_name = config.metric.name if config.metric else None
+    summaries: list[dict[str, object]] = []
+    for row in list_runs(workspace.db_path, workspace.competition_id):
+        tracking = mlflow_run_summary(
+            str(row["mlflow_run_id"]) if row.get("mlflow_run_id") else None,
+            metric_name,
+        )
+        summaries.append(
+            {
+                "id": row["name"],
+                "experiment": row["experiment_name"],
+                "status": row["status"],
+                "backend": row["backend"],
+                "exit_code": row["exit_code"],
+                "manifest_hash": row["artifact_manifest_hash"],
+                "tracked": tracking["tracked"],
+                "mlflow_run_id": tracking["mlflow_run_id"],
+                "primary_metric": tracking["primary_metric"],
+            }
+        )
+    return summaries
 
 
 def run_logs(workspace: Workspace, name: str) -> str:
