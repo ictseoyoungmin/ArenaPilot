@@ -29,6 +29,12 @@ class SplitType(StrEnum):
     TIME_SERIES = "time_series"
 
 
+class PredictionType(StrEnum):
+    PROBABILITY = "probability"
+    LABEL = "label"
+    VALUE = "value"
+
+
 class CompetitionConfig(StrictModel):
     platform: Literal["kaggle"]
     slug: str = Field(min_length=1)
@@ -135,7 +141,7 @@ class SplitConfig(StrictModel):
 
 
 class PredictionConfig(StrictModel):
-    type: Literal["probability", "label", "value"]
+    type: PredictionType
 
 
 class OOFConfig(StrictModel):
