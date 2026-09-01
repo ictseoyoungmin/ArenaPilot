@@ -106,6 +106,7 @@ outputs/runs/run001/
 ├── fold_metrics.json
 ├── predictions.parquet
 ├── oof.parquet
+├── submission.csv       # optional provider-ready artifact
 ├── logs.txt
 └── manifest.json
 ```
@@ -241,6 +242,73 @@ Arena DB schema v3 adds `remote_jobs`, including the provider kernel reference, 
 
 `compute.kaggle.accelerator: gpu` uses Kaggle's default GPU selection. A concrete accelerator ID in `arena.yaml` is forwarded to `kaggle kernels push --accelerator`.
 
+## Submit verified evidence
+
+A submission is a separate entity from its Experiment and Run. `predictions.parquet` remains experiment evidence, while `submission.csv` is the provider-ready representation that may include calibration, blending, ranking, clipping, or other submission-specific post-processing.
+
+Create an immutable submission artifact from a VERIFIED Run:
+
+```bash
+arena submit create --run run001
+# or explicitly choose a provider-ready CSV
+arena submit create --run run001 --file reports/blend.csv --message "blend v1"
+```
+
+Without `--file`, ArenaPilot expects `outputs/runs/<run>/submission.csv`. It copies the exact bytes to `submissions/subXXX.csv` and stores the SHA-256 in Arena DB so later edits cannot silently change what was reviewed for submission.
+
+Validate it against the competition sample submission:
+
+```bash
+arena submit validate sub001
+# when the competition uses a nonstandard sample filename
+arena submit validate sub001 --sample data/raw/gender_submission.csv
+```
+
+Validation checks exact headers, row count, first-column ID values and order, duplicate IDs, blank cells, and prediction semantics from the source Run's validation snapshot. Probability predictions must be finite and inside `[0, 1]`; value predictions must be finite.
+
+Only a validated submission can be sent:
+
+```bash
+arena submit budget
+arena submit budget --provider
+arena submit send sub001 --message "exp017 frequency encoding"
+```
+
+ArenaPilot enforces `submission.daily_budget` and `submission.total_budget` from `arena.yaml` immediately before the Kaggle call. A budget of `0` means unlimited. Local daily accounting uses UTC. `--provider` additionally asks the official Kaggle CLI for the team's current provider-side submission limits.
+
+Kaggle returns a numeric submission reference, which is stored with the exact file hash and source Run. Synchronize scoring later with:
+
+```bash
+arena submit status sub001
+arena submissions --sync
+```
+
+The lifecycle is:
+
+```text
+VERIFIED Run
+    ↓
+submission.csv / explicit CSV
+    ↓
+CREATED
+    ↓
+sample/schema validation
+    ↓
+VALIDATED
+    ↓
+Arena budget gate
+    ↓
+kaggle competitions submit
+    ↓
+SUBMITTED / PENDING
+    ↓
+score synchronization
+    ↓
+SCORED / FAILED
+```
+
+Arena DB schema v4 adds `submissions`, preserving source Run lineage, immutable file hash, provider reference, message, public/private scores, and timestamps. Creating several submissions from the same Run is allowed; each is independent evidence of the exact representation sent to the provider.
+
 ## Workspace contract
 
 ```text
@@ -277,4 +345,4 @@ pytest -q
 arena version
 ```
 
-Submissions and cross-competition memory remain subsequent slices.
+Cross-competition memory remains the next major slice.
