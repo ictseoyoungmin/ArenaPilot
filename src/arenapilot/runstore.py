@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
+from .db import initialize_database
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -102,6 +104,114 @@ def list_runs(path: Path, competition_id: str) -> list[dict[str, object]]:
             (competition_id,),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def get_canonical_run_for_experiment(
+    path: Path,
+    competition_id: str,
+    experiment_name: str,
+) -> dict[str, object] | None:
+    with sqlite3.connect(path) as connection:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            """
+            SELECT r.*, e.name AS experiment_name, e.title AS experiment_title
+            FROM experiments e
+            JOIN runs r ON r.id = e.canonical_run_id
+            WHERE e.competition_id = ? AND e.name = ?
+            """,
+            (competition_id, experiment_name),
+        ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def list_artifact_refs(path: Path, run_id: str) -> list[dict[str, object]]:
+    initialize_database(path)
+    with sqlite3.connect(path) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            """
+            SELECT * FROM artifact_refs
+            WHERE run_id = ?
+            ORDER BY kind, uri
+            """,
+            (run_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def finalize_verified_run(
+    path: Path,
+    *,
+    competition_id: str,
+    name: str,
+    manifest_path: str,
+    manifest_hash: str,
+    mlflow_run_id: str,
+    artifacts: list[dict[str, object]],
+) -> dict[str, object]:
+    initialize_database(path)
+    now = _utc_now()
+    with sqlite3.connect(path) as connection:
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            """
+            SELECT id, experiment_id, status
+            FROM runs
+            WHERE competition_id = ? AND name = ?
+            """,
+            (competition_id, name),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"run not found: {name}")
+        if row["status"] != "verifying":
+            raise ValueError(
+                f"invalid run transition for {name}: {row['status']} -> verified"
+            )
+
+        run_id = str(row["id"])
+        connection.execute(
+            """
+            UPDATE runs
+            SET status = 'verified', artifact_manifest_path = ?,
+                artifact_manifest_hash = ?, mlflow_run_id = ?, verified_at = ?
+            WHERE id = ?
+            """,
+            (manifest_path, manifest_hash, mlflow_run_id, now, run_id),
+        )
+
+        connection.execute("DELETE FROM artifact_refs WHERE run_id = ?", (run_id,))
+        for artifact in artifacts:
+            connection.execute(
+                """
+                INSERT INTO artifact_refs(
+                    id, run_id, kind, uri, sha256, size_bytes, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"art_{uuid4().hex}",
+                    run_id,
+                    str(artifact["kind"]),
+                    str(artifact["uri"]),
+                    str(artifact["sha256"]),
+                    int(artifact["size_bytes"]),
+                    now,
+                ),
+            )
+
+        connection.execute(
+            """
+            UPDATE experiments
+            SET canonical_run_id = COALESCE(canonical_run_id, ?)
+            WHERE id = ?
+            """,
+            (run_id, str(row["experiment_id"])),
+        )
+
+    record = get_run(path, competition_id, name)
+    assert record is not None
+    return record
 
 
 def transition_run(

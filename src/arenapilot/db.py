@@ -8,14 +8,10 @@ from uuid import uuid4
 from .models import ArenaConfig, ExperimentSpec, ValidationSpec
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
-_SCHEMA = """
+_BASE_SCHEMA = """
 PRAGMA foreign_keys = ON;
-
-CREATE TABLE IF NOT EXISTS schema_meta (
-    version INTEGER NOT NULL
-);
 
 CREATE TABLE IF NOT EXISTS competitions (
     id TEXT PRIMARY KEY,
@@ -106,16 +102,50 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 """
 
+_MIGRATION_2 = """
+CREATE TABLE IF NOT EXISTS artifact_refs (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    uri TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (run_id) REFERENCES runs(id),
+    UNIQUE(run_id, uri)
+);
+CREATE INDEX IF NOT EXISTS idx_artifact_refs_run_id ON artifact_refs(run_id);
+"""
+
 
 def initialize_database(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as connection:
-        connection.executescript(_SCHEMA)
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS schema_meta (version INTEGER NOT NULL)"
+        )
         row = connection.execute("SELECT version FROM schema_meta LIMIT 1").fetchone()
+
         if row is None:
+            connection.executescript(_BASE_SCHEMA)
+            connection.executescript(_MIGRATION_2)
             connection.execute("INSERT INTO schema_meta(version) VALUES (?)", (SCHEMA_VERSION,))
-        elif row[0] != SCHEMA_VERSION:
-            raise RuntimeError(f"unsupported database schema version: {row[0]}")
+            return
+
+        version = int(row[0])
+        if version > SCHEMA_VERSION:
+            raise RuntimeError(f"unsupported database schema version: {version}")
+
+        connection.executescript(_BASE_SCHEMA)
+        if version == 1:
+            connection.executescript(_MIGRATION_2)
+            connection.execute("UPDATE schema_meta SET version = 2")
+            version = 2
+
+        if version != SCHEMA_VERSION:
+            raise RuntimeError(f"unsupported database schema version: {version}")
+        connection.executescript(_MIGRATION_2)
 
 
 def read_schema_version(path: Path) -> int:

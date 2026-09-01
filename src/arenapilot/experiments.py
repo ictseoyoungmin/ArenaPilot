@@ -13,6 +13,8 @@ from .db import (
     next_experiment_name,
 )
 from .models import ExperimentParent, ExperimentSpec
+from .runstore import get_canonical_run_for_experiment
+from .tracking import mlflow_run_summary
 from .validation import validation_hashes
 from .workspace import (
     Workspace,
@@ -158,16 +160,32 @@ def show_experiment(workspace: Workspace, name: str) -> dict[str, object]:
     integrity: bool | None = None
     if row["status"] == "frozen" and row["config_hash"]:
         integrity = _hash_spec(spec) == row["config_hash"]
+
+    config = load_arena_config(workspace)
+    metric_name = config.metric.name if config.metric else None
+    canonical = get_canonical_run_for_experiment(
+        workspace.db_path,
+        workspace.competition_id,
+        name,
+    )
+    tracking = mlflow_run_summary(
+        str(canonical["mlflow_run_id"]) if canonical and canonical.get("mlflow_run_id") else None,
+        metric_name,
+    )
     return {
         "record": row,
         "spec": spec.model_dump(mode="json"),
         "parents": experiment_parents(workspace.db_path, str(row["id"])),
         "spec_integrity": integrity,
+        "canonical_run": canonical,
+        "tracking": tracking,
     }
 
 
 def list_experiment_summaries(workspace: Workspace) -> list[dict[str, object]]:
     rows = list_experiments(workspace.db_path, workspace.competition_id)
+    config = load_arena_config(workspace)
+    metric_name = config.metric.name if config.metric else None
     summaries: list[dict[str, object]] = []
     for row in rows:
         integrity: bool | None = None
@@ -176,6 +194,15 @@ def list_experiment_summaries(workspace: Workspace) -> list[dict[str, object]]:
                 integrity = _hash_spec(load_experiment_spec(workspace, str(row["name"]))) == row["config_hash"]
             except Exception:
                 integrity = False
+        canonical = get_canonical_run_for_experiment(
+            workspace.db_path,
+            workspace.competition_id,
+            str(row["name"]),
+        )
+        tracking = mlflow_run_summary(
+            str(canonical["mlflow_run_id"]) if canonical and canonical.get("mlflow_run_id") else None,
+            metric_name,
+        )
         summaries.append(
             {
                 "id": row["name"],
@@ -184,6 +211,9 @@ def list_experiment_summaries(workspace: Workspace) -> list[dict[str, object]]:
                 "validation": row["validation_id"],
                 "config_hash": row["config_hash"],
                 "spec_integrity": integrity,
+                "canonical_run": canonical["name"] if canonical else None,
+                "tracked": tracking["tracked"],
+                "primary_metric": tracking["primary_metric"],
             }
         )
     return summaries
