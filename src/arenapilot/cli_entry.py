@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from . import cli as _cli
+from .agent_cli import contract_command, experiment_configure_command
 from .execution import run_experiment
 from .memory_cli import (
     evidence_app,
@@ -19,6 +20,8 @@ from .submit_cli import submit_app, submissions_command
 # at call time, so the public entry point can upgrade execution without
 # duplicating the full command definition.
 _cli.run_local_experiment = run_experiment
+_cli.experiment_app.command("configure")(experiment_configure_command)
+_cli.app.command("contract")(contract_command)
 _cli.app.add_typer(remote_app, name="remote")
 _cli.app.add_typer(submit_app, name="submit")
 _cli.app.command("submissions")(submissions_command)
