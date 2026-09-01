@@ -3,8 +3,9 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
-from .models import ArenaConfig, ValidationSpec
+from .models import ArenaConfig, ExperimentSpec, ValidationSpec
 
 
 SCHEMA_VERSION = 1
@@ -255,3 +256,129 @@ def sync_validation_activation(
             comparison_domain_hash,
             spec_hash,
         )
+
+
+def next_experiment_name(path: Path, competition_id: str) -> str:
+    with sqlite3.connect(path) as connection:
+        rows = connection.execute(
+            "SELECT name FROM experiments WHERE competition_id = ?",
+            (competition_id,),
+        ).fetchall()
+    highest = 0
+    for (name,) in rows:
+        if name.startswith("exp") and name[3:].isdigit():
+            highest = max(highest, int(name[3:]))
+    return f"exp{highest + 1:03d}"
+
+
+def get_experiment(path: Path, competition_id: str, name: str) -> dict[str, object] | None:
+    with sqlite3.connect(path) as connection:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            "SELECT * FROM experiments WHERE competition_id = ? AND name = ?",
+            (competition_id, name),
+        ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def list_experiments(path: Path, competition_id: str) -> list[dict[str, object]]:
+    with sqlite3.connect(path) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            """
+            SELECT * FROM experiments
+            WHERE competition_id = ?
+            ORDER BY CAST(SUBSTR(name, 4) AS INTEGER), name
+            """,
+            (competition_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def experiment_parents(path: Path, experiment_id: str) -> list[dict[str, object]]:
+    with sqlite3.connect(path) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            """
+            SELECT parent.id, parent.name, parent.status, ep.relation
+            FROM experiment_parents ep
+            JOIN experiments parent ON parent.id = ep.parent_experiment_id
+            WHERE ep.experiment_id = ?
+            ORDER BY parent.name
+            """,
+            (experiment_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def create_experiment_record(
+    path: Path,
+    competition_id: str,
+    spec: ExperimentSpec,
+    comparison_domain_hash: str,
+    spec_path: Path,
+) -> dict[str, object]:
+    experiment_id = f"exp_{uuid4().hex}"
+    now = _utc_now()
+    with sqlite3.connect(path) as connection:
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute(
+            """
+            INSERT INTO experiments(
+                id, competition_id, name, title, status, hypothesis,
+                validation_id, comparison_domain_hash, config_hash,
+                spec_path, evaluation, created_at
+            ) VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, NULL, ?, 'unknown', ?)
+            """,
+            (
+                experiment_id,
+                competition_id,
+                spec.id,
+                spec.title,
+                spec.hypothesis,
+                spec.validation,
+                comparison_domain_hash,
+                str(spec_path),
+                now,
+            ),
+        )
+        for parent in spec.parents:
+            parent_row = connection.execute(
+                "SELECT id FROM experiments WHERE competition_id = ? AND name = ?",
+                (competition_id, parent.experiment),
+            ).fetchone()
+            if parent_row is None:
+                raise ValueError(f"parent experiment not found: {parent.experiment}")
+            connection.execute(
+                """
+                INSERT INTO experiment_parents(
+                    experiment_id, parent_experiment_id, relation
+                ) VALUES (?, ?, ?)
+                """,
+                (experiment_id, parent_row[0], parent.relation),
+            )
+    record = get_experiment(path, competition_id, spec.id)
+    assert record is not None
+    return record
+
+
+def freeze_experiment_record(
+    path: Path,
+    competition_id: str,
+    name: str,
+    config_hash: str,
+) -> dict[str, object]:
+    with sqlite3.connect(path) as connection:
+        cursor = connection.execute(
+            """
+            UPDATE experiments
+            SET status = 'frozen', config_hash = ?, frozen_at = ?
+            WHERE competition_id = ? AND name = ? AND status = 'draft'
+            """,
+            (config_hash, _utc_now(), competition_id, name),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError(f"experiment is not draft: {name}")
+    record = get_experiment(path, competition_id, name)
+    assert record is not None
+    return record
