@@ -8,7 +8,7 @@ from uuid import uuid4
 from .models import ArenaConfig, ExperimentSpec, ValidationSpec
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _BASE_SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -136,6 +136,36 @@ CREATE INDEX IF NOT EXISTS idx_remote_jobs_provider_job_id
     ON remote_jobs(provider, provider_job_id);
 """
 
+_MIGRATION_4 = """
+CREATE TABLE IF NOT EXISTS submissions (
+    id TEXT PRIMARY KEY,
+    competition_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    source_run_id TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    file_sha256 TEXT NOT NULL,
+    status TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    platform_submission_id TEXT,
+    message TEXT,
+    public_score REAL,
+    private_score REAL,
+    failure_message TEXT,
+    created_at TEXT NOT NULL,
+    validated_at TEXT,
+    submitted_at TEXT,
+    scored_at TEXT,
+    FOREIGN KEY (competition_id) REFERENCES competitions(id),
+    FOREIGN KEY (source_run_id) REFERENCES runs(id),
+    UNIQUE(competition_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_submissions_source_run_id
+    ON submissions(source_run_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_submissions_platform_ref
+    ON submissions(platform, platform_submission_id)
+    WHERE platform_submission_id IS NOT NULL;
+"""
+
 
 def initialize_database(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -150,6 +180,7 @@ def initialize_database(path: Path) -> None:
             connection.executescript(_BASE_SCHEMA)
             connection.executescript(_MIGRATION_2)
             connection.executescript(_MIGRATION_3)
+            connection.executescript(_MIGRATION_4)
             connection.execute("INSERT INTO schema_meta(version) VALUES (?)", (SCHEMA_VERSION,))
             return
 
@@ -166,11 +197,16 @@ def initialize_database(path: Path) -> None:
             connection.executescript(_MIGRATION_3)
             connection.execute("UPDATE schema_meta SET version = 3")
             version = 3
+        if version == 3:
+            connection.executescript(_MIGRATION_4)
+            connection.execute("UPDATE schema_meta SET version = 4")
+            version = 4
 
         if version != SCHEMA_VERSION:
             raise RuntimeError(f"unsupported database schema version: {version}")
         connection.executescript(_MIGRATION_2)
         connection.executescript(_MIGRATION_3)
+        connection.executescript(_MIGRATION_4)
 
 
 def read_schema_version(path: Path) -> int:
