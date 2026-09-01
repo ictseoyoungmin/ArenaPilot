@@ -2,6 +2,14 @@ from __future__ import annotations
 
 from . import cli as _cli
 from .execution import run_experiment
+from .memory_cli import (
+    evidence_app,
+    failure_app,
+    finding_app,
+    fingerprint_app,
+    knowledge_app,
+    learn_command,
+)
 from .remote_cli import remote_app
 from .submit_cli import submit_app, submissions_command
 
@@ -13,5 +21,11 @@ _cli.run_local_experiment = run_experiment
 _cli.app.add_typer(remote_app, name="remote")
 _cli.app.add_typer(submit_app, name="submit")
 _cli.app.command("submissions")(submissions_command)
+_cli.app.add_typer(fingerprint_app, name="fingerprint")
+_cli.app.add_typer(evidence_app, name="evidence")
+_cli.app.add_typer(finding_app, name="finding")
+_cli.app.add_typer(knowledge_app, name="knowledge")
+_cli.app.add_typer(failure_app, name="failure")
+_cli.app.command("learn")(learn_command)
 
 app = _cli.app
