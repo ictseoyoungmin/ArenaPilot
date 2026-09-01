@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 from pathlib import Path
@@ -46,7 +47,16 @@ def mlflow_experiment_name(config: ArenaConfig) -> str:
     )
 
 
+def _quiet_mlflow_logs() -> None:
+    # Agent-facing CLI commands support a strict --json contract. MLflow emits
+    # database bootstrap INFO logs through Python logging on first use, which
+    # would otherwise corrupt the JSON stream captured by Typer/Click.
+    for logger_name in ("mlflow", "alembic", "sqlalchemy"):
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
+
+
 def _client() -> MlflowClient:
+    _quiet_mlflow_logs()
     try:
         return MlflowClient(tracking_uri=tracking_uri())
     except Exception as exc:
