@@ -8,7 +8,7 @@ from uuid import uuid4
 from .models import ArenaConfig, ExperimentSpec, ValidationSpec
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _BASE_SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -117,6 +117,25 @@ CREATE TABLE IF NOT EXISTS artifact_refs (
 CREATE INDEX IF NOT EXISTS idx_artifact_refs_run_id ON artifact_refs(run_id);
 """
 
+_MIGRATION_3 = """
+CREATE TABLE IF NOT EXISTS remote_jobs (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL UNIQUE,
+    provider TEXT NOT NULL,
+    provider_job_id TEXT NOT NULL,
+    state TEXT NOT NULL,
+    bundle_path TEXT NOT NULL,
+    submitted_at TEXT,
+    started_at TEXT,
+    finished_at TEXT,
+    last_seen_at TEXT NOT NULL,
+    recovery_state TEXT NOT NULL,
+    FOREIGN KEY (run_id) REFERENCES runs(id)
+);
+CREATE INDEX IF NOT EXISTS idx_remote_jobs_provider_job_id
+    ON remote_jobs(provider, provider_job_id);
+"""
+
 
 def initialize_database(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -130,6 +149,7 @@ def initialize_database(path: Path) -> None:
         if row is None:
             connection.executescript(_BASE_SCHEMA)
             connection.executescript(_MIGRATION_2)
+            connection.executescript(_MIGRATION_3)
             connection.execute("INSERT INTO schema_meta(version) VALUES (?)", (SCHEMA_VERSION,))
             return
 
@@ -142,10 +162,15 @@ def initialize_database(path: Path) -> None:
             connection.executescript(_MIGRATION_2)
             connection.execute("UPDATE schema_meta SET version = 2")
             version = 2
+        if version == 2:
+            connection.executescript(_MIGRATION_3)
+            connection.execute("UPDATE schema_meta SET version = 3")
+            version = 3
 
         if version != SCHEMA_VERSION:
             raise RuntimeError(f"unsupported database schema version: {version}")
         connection.executescript(_MIGRATION_2)
+        connection.executescript(_MIGRATION_3)
 
 
 def read_schema_version(path: Path) -> int:
