@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
+from .db import initialize_database
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -124,6 +126,7 @@ def get_canonical_run_for_experiment(
 
 
 def list_artifact_refs(path: Path, run_id: str) -> list[dict[str, object]]:
+    initialize_database(path)
     with sqlite3.connect(path) as connection:
         connection.row_factory = sqlite3.Row
         rows = connection.execute(
@@ -147,6 +150,7 @@ def finalize_verified_run(
     mlflow_run_id: str,
     artifacts: list[dict[str, object]],
 ) -> dict[str, object]:
+    initialize_database(path)
     now = _utc_now()
     with sqlite3.connect(path) as connection:
         connection.execute("PRAGMA foreign_keys = ON")
