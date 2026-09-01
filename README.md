@@ -37,6 +37,37 @@ arena doctor
 
 Once a validation is active, the competition intake contract is immutable in v0. Changing target or metric later must be handled as an explicit migration rather than silently rewriting the evaluation history.
 
+## Create and freeze experiments
+
+Experiments can only be created after the competition is `ready`. Each experiment is automatically bound to the active validation and receives the next stable human-readable ID.
+
+```bash
+arena exp new \
+  --title baseline \
+  --hypothesis "A CatBoost baseline establishes the comparison floor." \
+  --model-family catboost
+
+# edit experiments/exp001.yaml while it is still draft
+arena exp freeze exp001
+
+arena exp show exp001
+arena exp list
+```
+
+A frozen experiment is immutable. ArenaPilot stores its config hash in SQLite and an immutable snapshot under `outputs/specs/<experiment>/<hash>.yaml`. If the editable experiment YAML is changed after freeze, integrity checks report the mismatch and another freeze fails with `FROZEN_SPEC_MODIFIED`.
+
+Derived experiments require a frozen parent:
+
+```bash
+arena exp new \
+  --from exp001 \
+  --title frequency-encoding \
+  --hypothesis "Frequency encoding improves high-cardinality categoricals." \
+  --model-family catboost
+
+arena exp lineage exp002
+```
+
 The workspace contract is:
 
 ```text
@@ -49,7 +80,9 @@ competition/
 ├── experiments/
 ├── src/
 ├── data/{raw,processed}/
-├── outputs/runs/
+├── outputs/
+│   ├── runs/
+│   └── specs/
 ├── submissions/
 ├── reports/
 ├── notebooks/
@@ -70,4 +103,4 @@ pytest -q
 arena version
 ```
 
-Experiment creation/freezing, run execution, Kaggle compute, and MLflow ingestion remain subsequent slices.
+Run execution, artifact verification, Kaggle compute, and MLflow ingestion remain subsequent slices.
