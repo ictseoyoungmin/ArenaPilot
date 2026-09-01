@@ -10,7 +10,7 @@ from uuid import uuid4
 import yaml
 
 from .db import initialize_database
-from .models import ArenaConfig, ValidationSpec
+from .models import ArenaConfig, ExperimentSpec, ValidationSpec
 
 
 class WorkspaceError(RuntimeError):
@@ -46,6 +46,12 @@ class Workspace:
     def validation_path(self, name: str) -> Path:
         return self.root / "configs" / "validation" / f"{name}.yaml"
 
+    def experiment_path(self, name: str) -> Path:
+        return self.root / "experiments" / f"{name}.yaml"
+
+    def frozen_experiment_path(self, name: str, config_hash: str) -> Path:
+        return self.root / "outputs" / "specs" / name / f"{config_hash}.yaml"
+
 
 SCAFFOLD_DIRS = (
     "configs/validation",
@@ -56,6 +62,7 @@ SCAFFOLD_DIRS = (
     "data/raw",
     "data/processed",
     "outputs/runs",
+    "outputs/specs",
     "submissions",
     "reports",
     "notebooks",
@@ -79,12 +86,13 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex}"
 
 
-def _yaml_text(model: ArenaConfig | ValidationSpec) -> str:
+def _yaml_text(model: ArenaConfig | ValidationSpec | ExperimentSpec) -> str:
     payload = model.model_dump(mode="json", exclude_none=False)
     return yaml.safe_dump(payload, sort_keys=False, allow_unicode=True)
 
 
 def _atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
     temporary.write_text(text, encoding="utf-8")
     os.replace(temporary, path)
@@ -98,6 +106,20 @@ def save_validation_spec(workspace: Workspace, spec: ValidationSpec) -> None:
     _atomic_write_text(workspace.validation_path(spec.id), _yaml_text(spec))
 
 
+def save_experiment_spec(workspace: Workspace, spec: ExperimentSpec) -> None:
+    _atomic_write_text(workspace.experiment_path(spec.id), _yaml_text(spec))
+
+
+def save_frozen_experiment_spec(
+    workspace: Workspace,
+    spec: ExperimentSpec,
+    config_hash: str,
+) -> Path:
+    path = workspace.frozen_experiment_path(spec.id, config_hash)
+    _atomic_write_text(path, _yaml_text(spec))
+    return path
+
+
 def load_arena_config(workspace: Workspace) -> ArenaConfig:
     raw = yaml.safe_load(workspace.config_path.read_text(encoding="utf-8"))
     return ArenaConfig.model_validate(raw)
@@ -109,6 +131,14 @@ def load_validation_spec(workspace: Workspace, name: str) -> ValidationSpec:
         raise WorkspaceError(f"validation not found: {name}")
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     return ValidationSpec.model_validate(raw)
+
+
+def load_experiment_spec(workspace: Workspace, name: str) -> ExperimentSpec:
+    path = workspace.experiment_path(name)
+    if not path.is_file():
+        raise WorkspaceError(f"experiment spec not found: {name}")
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return ExperimentSpec.model_validate(raw)
 
 
 def create_workspace(
