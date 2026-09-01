@@ -10,6 +10,7 @@ from .memory_cli import (
     knowledge_app,
     learn_command,
 )
+from .promotion_cli import independence_app, technique_app
 from .remote_cli import remote_app
 from .submit_cli import submit_app, submissions_command
 
@@ -26,6 +27,8 @@ _cli.app.add_typer(evidence_app, name="evidence")
 _cli.app.add_typer(finding_app, name="finding")
 _cli.app.add_typer(knowledge_app, name="knowledge")
 _cli.app.add_typer(failure_app, name="failure")
+_cli.app.add_typer(independence_app, name="independence")
+_cli.app.add_typer(technique_app, name="technique")
 _cli.app.command("learn")(learn_command)
 
 app = _cli.app
