@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,6 +43,9 @@ class Workspace:
     def config_path(self) -> Path:
         return self.root / "arena.yaml"
 
+    def validation_path(self, name: str) -> Path:
+        return self.root / "configs" / "validation" / f"{name}.yaml"
+
 
 SCAFFOLD_DIRS = (
     "configs/validation",
@@ -75,17 +79,36 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex}"
 
 
-def _write_yaml(path: Path, model: ArenaConfig | ValidationSpec) -> None:
+def _yaml_text(model: ArenaConfig | ValidationSpec) -> str:
     payload = model.model_dump(mode="json", exclude_none=False)
-    path.write_text(
-        yaml.safe_dump(payload, sort_keys=False, allow_unicode=True),
-        encoding="utf-8",
-    )
+    return yaml.safe_dump(payload, sort_keys=False, allow_unicode=True)
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    temporary.write_text(text, encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def save_arena_config(workspace: Workspace, config: ArenaConfig) -> None:
+    _atomic_write_text(workspace.config_path, _yaml_text(config))
+
+
+def save_validation_spec(workspace: Workspace, spec: ValidationSpec) -> None:
+    _atomic_write_text(workspace.validation_path(spec.id), _yaml_text(spec))
 
 
 def load_arena_config(workspace: Workspace) -> ArenaConfig:
     raw = yaml.safe_load(workspace.config_path.read_text(encoding="utf-8"))
     return ArenaConfig.model_validate(raw)
+
+
+def load_validation_spec(workspace: Workspace, name: str) -> ValidationSpec:
+    path = workspace.validation_path(name)
+    if not path.is_file():
+        raise WorkspaceError(f"validation not found: {name}")
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return ValidationSpec.model_validate(raw)
 
 
 def create_workspace(
@@ -128,7 +151,7 @@ def create_workspace(
                 },
             }
         )
-        _write_yaml(staging / "arena.yaml", config)
+        (staging / "arena.yaml").write_text(_yaml_text(config), encoding="utf-8")
 
         validation = ValidationSpec.model_validate(
             {
@@ -153,7 +176,10 @@ def create_workspace(
                 },
             }
         )
-        _write_yaml(staging / "configs" / "validation" / "val-v1.yaml", validation)
+        (staging / "configs" / "validation" / "val-v1.yaml").write_text(
+            _yaml_text(validation),
+            encoding="utf-8",
+        )
 
         marker = {
             "schema_version": 1,
